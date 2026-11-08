@@ -4,6 +4,7 @@ import { yDocToProsemirrorJSON } from "y-prosemirror";
 import {
   TextEditMode,
   MentionType,
+  UnfurlResourceType,
   type ProsemirrorData,
   type ProsemirrorMark,
 } from "@shared/types";
@@ -85,6 +86,123 @@ describe("documentUpdater", () => {
 
     await document.reload();
     expect(DocumentHelper.parseMentions(document)).toEqual(originalMentions);
+  });
+
+  it.each(Object.values(TextEditMode))(
+    "should keep the href and unfurl of external mentions in %s mode",
+    async (editMode) => {
+      const user = await buildUser();
+      const href =
+        "https://ruiner.codecks.io/card/16a-document-how-things-work";
+      const unfurl = {
+        type: UnfurlResourceType.Issue,
+        url: href,
+        id: "$16a",
+        title: "Document how things work.",
+        description: null,
+        author: { name: "", avatarUrl: "" },
+        labels: [],
+        state: { name: "open", color: "#8B949E" },
+        createdAt: "2026-11-01T00:00:00.000Z",
+      };
+      const mentionId = randomUUID();
+      const initialDoc = schema.nodes.doc.create(undefined, [
+        schema.nodes.paragraph.create(undefined, [
+          schema.nodes.mention.create({
+            type: MentionType.Issue,
+            id: mentionId,
+            modelId: randomUUID(),
+            label: unfurl.title,
+            actorId: user.id,
+            href,
+            unfurl,
+          }),
+        ]),
+        schema.nodes.paragraph.create(undefined, schema.text("replace me")),
+      ]);
+      let document = await buildDocument({
+        teamId: user.teamId,
+        content: initialDoc.toJSON(),
+      });
+
+      // The API and MCP present documents in Outline's internal Markdown, which
+      // refers to mentions by mention:// and so cannot carry the href.
+      const text =
+        editMode === TextEditMode.Replace
+          ? await DocumentHelper.toMarkdown(document, { includeTitle: false })
+          : "patched";
+      expect(text).not.toContain(href);
+
+      document = await withAPIContext(user, (ctx) =>
+        documentUpdater(ctx, {
+          document,
+          text,
+          editMode,
+          findText: editMode === TextEditMode.Patch ? "replace me" : undefined,
+        })
+      );
+
+      await document.reload();
+      expect(
+        DocumentHelper.parseMentions(document, { type: MentionType.Issue })
+      ).toEqual([expect.objectContaining({ id: mentionId, href, unfurl })]);
+    }
+  );
+
+  it("should not restore attributes onto a mention that now refers to another model", () => {
+    const actorId = randomUUID();
+    const id = randomUUID();
+    const href = "https://ruiner.codecks.io/card/16a-document-how-things-work";
+    const buildDoc = (attrs: Record<string, string>) =>
+      schema.nodes.doc.create(undefined, [
+        schema.nodes.paragraph.create(undefined, [
+          schema.nodes.mention.create({
+            type: MentionType.Issue,
+            id,
+            label: "Card",
+            actorId,
+            ...attrs,
+          }),
+        ]),
+      ]);
+
+    const result = ProsemirrorHelper.assignMentionActors(
+      buildDoc({ modelId: randomUUID() }),
+      actorId,
+      buildDoc({ modelId: randomUUID(), href })
+    );
+
+    expect(ProsemirrorHelper.parseMentions(result)[0].href).toBeUndefined();
+  });
+
+  it("should prefer an href written in the update over the retained one", () => {
+    const actorId = randomUUID();
+    const id = randomUUID();
+    const modelId = randomUUID();
+    const buildDoc = (href: string) =>
+      schema.nodes.doc.create(undefined, [
+        schema.nodes.paragraph.create(undefined, [
+          schema.nodes.mention.create({
+            type: MentionType.Issue,
+            id,
+            modelId,
+            label: "Card",
+            actorId,
+            href,
+          }),
+        ]),
+      ]);
+    const updatedHref = "https://ruiner.codecks.io/card/16c-updated";
+
+    const result = ProsemirrorHelper.assignMentionActors(
+      buildDoc(updatedHref),
+      actorId,
+      buildDoc("https://ruiner.codecks.io/card/16a-original")
+    );
+
+    expect(ProsemirrorHelper.parseMentions(result)[0].href).toEqual(
+      updatedHref
+    );
   });
 
   it("should change lastModifiedById", async () => {

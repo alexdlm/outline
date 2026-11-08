@@ -191,11 +191,14 @@ export class ProsemirrorHelper extends SharedProsemirrorHelper {
   /**
    * Attributes new mentions to the writer, preserving the original actor of
    * mentions retained from an earlier document, including Markdown round trips.
+   * Retained mentions also keep the href and unfurl that the mention:// form of
+   * Outline's internal Markdown cannot carry, so external mentions survive a
+   * document being rewritten through the API.
    *
    * @param doc the updated document.
    * @param actorId the authenticated writer's ID.
    * @param previousDoc the document before the update, if any.
-   * @returns the document with mention attribution restored or assigned.
+   * @returns the document with mention attribution and attributes restored or assigned.
    */
   static assignMentionActors(doc: Node, actorId: string, previousDoc?: Node) {
     const previousMentions = new Map(
@@ -221,11 +224,23 @@ export class ProsemirrorHelper extends SharedProsemirrorHelper {
       const mentionActorId = retained
         ? previous.actorId
         : (node.attrs.actorId ?? actorId);
+      const href = retained
+        ? (node.attrs.href ?? previous.href)
+        : node.attrs.href;
+      const unfurl = retained
+        ? (node.attrs.unfurl ?? previous.unfurl)
+        : node.attrs.unfurl;
 
-      if (mentionActorId !== node.attrs.actorId) {
+      if (
+        mentionActorId !== node.attrs.actorId ||
+        href !== node.attrs.href ||
+        unfurl !== node.attrs.unfurl
+      ) {
         transform.setNodeMarkup(pos, undefined, {
           ...node.attrs,
           actorId: mentionActorId,
+          href,
+          unfurl,
         });
       }
       return false;
