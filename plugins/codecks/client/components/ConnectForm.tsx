@@ -58,7 +58,7 @@ export function ConnectForm({
     setSaving(true);
     try {
       const res = await client.post<{ data: CodecksInfo }>("/codecks.connect", {
-        token: trimmedToken,
+        apiToken: trimmedToken,
         subdomain,
       });
       setToken("");

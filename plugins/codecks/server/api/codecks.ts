@@ -52,7 +52,7 @@ router.post(
   validate(T.CodecksConnectSchema),
   transaction(),
   async (ctx: APIContext<T.CodecksConnectReq>) => {
-    const { token, subdomain } = ctx.input.body;
+    const { apiToken: token, subdomain } = ctx.input.body;
     const { user } = ctx.state.auth;
     const { transaction } = ctx.state;
 

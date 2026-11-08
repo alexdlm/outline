@@ -6,8 +6,12 @@ import { CodecksMappingSchema } from "../gate";
 /** The request to connect a Codecks organization, or to replace its token. */
 export const CodecksConnectSchema = BaseSchema.extend({
   body: z.object({
-    /** An organization API token, created in Codecks under Organization Settings. */
-    token: z
+    /**
+     * An organization API token, created in Codecks under Organization
+     * Settings. Not named "token", which authentication reads as the
+     * caller's own credential.
+     */
+    apiToken: z
       .string()
       .trim()
       .min(1)

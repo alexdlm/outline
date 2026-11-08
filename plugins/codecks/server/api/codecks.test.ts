@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { CSRF } from "@shared/constants";
 import {
   CollectionPermission,
   DocumentPermission,
@@ -25,6 +26,8 @@ import {
 import { getTestServer } from "@server/test/support";
 import { CacheHelper } from "@server/utils/CacheHelper";
 import { RedisPrefixHelper } from "@server/utils/RedisPrefixHelper";
+import env from "@server/env";
+import { bundleToken, generateRawToken } from "@server/utils/csrf";
 import type { CodecksAccount, CodecksMapping } from "../../shared/types";
 import {
   Codecks,
@@ -121,7 +124,7 @@ describe("#codecks.connect", () => {
       .mockResolvedValue(account);
 
     const res = await server.post("/api/codecks.connect", admin, {
-      body: { token, subdomain: "https://Acme.codecks.io/" },
+      body: { apiToken: token, subdomain: "https://Acme.codecks.io/" },
     });
     const body = await res.json();
 
@@ -145,12 +148,30 @@ describe("#codecks.connect", () => {
     });
   });
 
+  it("should connect from a browser session", async () => {
+    const admin = await buildAdmin();
+    vi.spyOn(Codecks, "getAccount").mockResolvedValue(buildAccount());
+
+    // Browsers authenticate with the session cookie, which a "token" in the
+    // body would take precedence over.
+    const csrfToken = bundleToken(generateRawToken(16), env.SECRET_KEY);
+    const res = await server.post("/api/codecks.connect", {
+      headers: {
+        Cookie: `accessToken=${admin.getSessionToken()}; ${CSRF.cookieName}=${csrfToken}`,
+        [CSRF.headerName]: csrfToken,
+      },
+      body: { apiToken: token, subdomain: "acme" },
+    });
+
+    expect(res.status).toEqual(200);
+  });
+
   it("should require an admin", async () => {
     const user = await buildUser();
     const getAccount = vi.spyOn(Codecks, "getAccount");
 
     const res = await server.post("/api/codecks.connect", user, {
-      body: { token, subdomain: "acme" },
+      body: { apiToken: token, subdomain: "acme" },
     });
 
     expect(res.status).toEqual(403);
@@ -164,7 +185,7 @@ describe("#codecks.connect", () => {
 
     const res = await server.post("/api/codecks.connect", {
       headers: { authorization: `Bearer ${apiKey.value}` },
-      body: { token, subdomain: "acme" },
+      body: { apiToken: token, subdomain: "acme" },
     });
 
     expect(res.status).toEqual(403);
@@ -176,7 +197,7 @@ describe("#codecks.connect", () => {
     const getAccount = vi.spyOn(Codecks, "getAccount");
 
     const res = await server.post("/api/codecks.connect", admin, {
-      body: { token, subdomain: "acme.example.com" },
+      body: { apiToken: token, subdomain: "acme.example.com" },
     });
 
     expect(res.status).toEqual(400);
@@ -190,7 +211,7 @@ describe("#codecks.connect", () => {
     );
 
     const res = await server.post("/api/codecks.connect", admin, {
-      body: { token, subdomain: "acme" },
+      body: { apiToken: token, subdomain: "acme" },
     });
     const body = await res.json();
 
@@ -209,7 +230,7 @@ describe("#codecks.connect", () => {
     );
 
     const res = await server.post("/api/codecks.connect", admin, {
-      body: { token, subdomain: "acme" },
+      body: { apiToken: token, subdomain: "acme" },
     });
     const body = await res.json();
 
@@ -235,7 +256,7 @@ describe("#codecks.connect", () => {
     vi.spyOn(Codecks, "getAccount").mockResolvedValue(other);
 
     const res = await server.post("/api/codecks.connect", admin, {
-      body: { token, subdomain: "other" },
+      body: { apiToken: token, subdomain: "other" },
     });
     const body = await res.json();
 
@@ -260,7 +281,7 @@ describe("#codecks.connect", () => {
     vi.spyOn(Codecks, "getAccount").mockResolvedValue(account);
 
     const res = await server.post("/api/codecks.connect", admin, {
-      body: { token, subdomain: "acme" },
+      body: { apiToken: token, subdomain: "acme" },
     });
 
     expect(res.status).toEqual(200);
