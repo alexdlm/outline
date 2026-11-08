@@ -30,14 +30,15 @@ export function presentCard(card: CodecksCard, subdomain: string): IssueUnfurl {
     description: presentDescription(card.content),
     author: { name: "", avatarUrl: "" },
     labels: [],
-    state: { name: "opened", color: "" },
+    state: { name: "opened", color: OpenedColor },
     createdAt: card.createdAt ?? new Date(0).toISOString(),
     codecks: presentDetails(card, subdomain, shortId),
   };
 
-  // The state is the coarse one stored on mentions, so a stored snapshot
-  // matches what was shown and only changes when the card is completed.
-  return { ...unfurl, state: CodecksUtils.toSnapshot(unfurl).state };
+  // A coarse state for renderers without Codecks support, it is never stored.
+  return CodecksUtils.isClosed(unfurl)
+    ? { ...unfurl, state: { name: "closed", color: ClosedColor } }
+    : unfurl;
 }
 
 /**
@@ -153,3 +154,7 @@ function httpsUrl(value: string | null): string | null {
 function hexColor(value: string | null): string | null {
   return value && HexColorPattern.test(value) ? value : null;
 }
+
+// Colors of the coarse state, as GitLab uses them for open and closed issues.
+const OpenedColor = "#1f75cb";
+const ClosedColor = "#3fb950";

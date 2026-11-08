@@ -2,7 +2,12 @@ import Router from "@koa/router";
 import type { Transaction } from "sequelize";
 import { IntegrationService, IntegrationType, UserRole } from "@shared/types";
 import { toError } from "@shared/utils/error";
-import { NotFoundError, ValidationError } from "@server/errors";
+import { Minute } from "@shared/utils/time";
+import {
+  AuthorizationError,
+  NotFoundError,
+  ValidationError,
+} from "@server/errors";
 import Logger from "@server/logging/Logger";
 import auth from "@server/middlewares/authentication";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
@@ -10,6 +15,7 @@ import { transaction } from "@server/middlewares/transaction";
 import validate from "@server/middlewares/validate";
 import {
   Collection,
+  Document,
   Integration,
   IntegrationAuthentication,
 } from "@server/models";
@@ -24,11 +30,19 @@ import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import { RedisPrefixHelper } from "@server/utils/RedisPrefixHelper";
 import type { CodecksMapping } from "../../shared/types";
 import { Codecks, CodecksError } from "../codecks";
-import { getCodecksAccount, getCodecksMappings } from "../gate";
-import { presentInfo } from "../presenters";
+import type { CodecksCard, CodecksConnection } from "../codecks";
+import {
+  allowedProjectIds,
+  getCodecksAccount,
+  getCodecksMappings,
+} from "../gate";
+import { presentCard, presentInfo } from "../presenters";
 import * as T from "./schema";
 
-/** The routes that admins use to connect Codecks and map its projects. */
+/**
+ * The routes that admins use to connect Codecks and map its projects, and that
+ * members use to search the cards they may mention.
+ */
 export const router = new Router();
 
 router.post(
@@ -205,6 +219,82 @@ router.post(
   }
 );
 
+router.post(
+  "codecks.search",
+  rateLimiter(RateLimiterStrategy.OneHundredPerMinute),
+  auth(),
+  validate(T.CodecksSearchSchema),
+  async (ctx: APIContext<T.CodecksSearchReq>) => {
+    const { query, documentId } = ctx.input.body;
+    const { user } = ctx.state.auth;
+
+    if (user.isGuest) {
+      throw AuthorizationError("Guests cannot search Codecks cards.");
+    }
+
+    let document: Document | undefined;
+    if (documentId) {
+      const found = await Document.findByPk(documentId, {
+        userId: user.id,
+        includeViews: false,
+        includeContent: false,
+      });
+      authorize(user, "read", found);
+      document = found;
+    }
+
+    const integration = await findIntegration(user.teamId);
+    const account = integration ? getCodecksAccount(integration) : undefined;
+    const token = integration?.authentication?.token;
+    if (!integration || !account || !token) {
+      ctx.body = { data: [] };
+      return;
+    }
+
+    let projectIds = await allowedProjectIds(user, integration);
+    if (document) {
+      projectIds = narrowToCollection(
+        integration,
+        projectIds,
+        document.collectionId
+      );
+    }
+    if (projectIds.size === 0) {
+      ctx.body = { data: [] };
+      return;
+    }
+
+    const connection = {
+      token,
+      subdomain: account.subdomain,
+      accountId: account.id,
+    };
+
+    let cards: CodecksCard[] = [];
+    try {
+      const deckIds = await findDeckIds(user.teamId, connection, projectIds);
+      if (deckIds.length > 0) {
+        cards = await Codecks.searchCards(connection, {
+          deckIds,
+          query,
+          limit: SearchLimit,
+        });
+      }
+    } catch (err) {
+      throw toRequestError(err);
+    }
+
+    ctx.body = {
+      data: cards
+        .filter((card) => !!card.project && projectIds.has(card.project.id))
+        .map((card) => presentCard(card, account.subdomain)),
+    };
+  }
+);
+
+/** The most cards a search returns. */
+const SearchLimit = 10;
+
 function lockName(teamId: string) {
   return `integrations:codecks:${teamId}`;
 }
@@ -268,6 +358,71 @@ async function assertMappableCollections(
     }
   }
 }
+
+/**
+ * Narrows projects to those mapped to a collection. When nothing is mapped to
+ * the collection the projects are returned unchanged, they are never widened.
+ *
+ * @param integration the Codecks integration.
+ * @param projectIds the projects the user may see.
+ * @param collectionId the collection, if any.
+ * @returns the projects to search.
+ */
+function narrowToCollection(
+  integration: Integration,
+  projectIds: Set<string>,
+  collectionId: string | null | undefined
+): Set<string> {
+  const mapped = (getCodecksMappings(integration) ?? []).filter(
+    (mapping) => mapping.collectionId === collectionId
+  );
+  if (mapped.length === 0) {
+    return projectIds;
+  }
+  return new Set(
+    mapped
+      .map((mapping) => mapping.projectId)
+      .filter((projectId) => projectIds.has(projectId))
+  );
+}
+
+/**
+ * Finds the decks of projects. The organization's decks are cached with the
+ * team's unfurls, so that most searches make a single request to Codecks.
+ *
+ * @param teamId the team.
+ * @param connection the token and organization to query.
+ * @param projectIds the projects.
+ * @returns the IDs of the projects' decks.
+ * @throws CodecksError if the decks could not be loaded.
+ */
+async function findDeckIds(
+  teamId: string,
+  connection: CodecksConnection & { accountId: string },
+  projectIds: Set<string>
+): Promise<string[]> {
+  const projects = await CacheHelper.getDataOrSet<ProjectDecks[]>(
+    `${RedisPrefixHelper.getUnfurlPrefix(teamId)}codecks:${connection.accountId}:decks`,
+    async () =>
+      (await Codecks.listProjectsWithDecks(connection)).map((project) => ({
+        id: project.id,
+        deckIds: project.decks.map((deck) => deck.id),
+      })),
+    DeckCacheExpiry
+  );
+
+  return (projects ?? [])
+    .filter((project) => projectIds.has(project.id))
+    .flatMap((project) => project.deckIds);
+}
+
+interface ProjectDecks {
+  id: string;
+  deckIds: string[];
+}
+
+/** How long the decks of an organization are cached, in seconds. */
+const DeckCacheExpiry = Minute.seconds;
 
 function uniqueMappings(mappings: CodecksMapping[]): CodecksMapping[] {
   const seen = new Set<string>();

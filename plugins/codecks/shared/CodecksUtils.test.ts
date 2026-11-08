@@ -138,51 +138,22 @@ describe("CodecksUtils", () => {
     });
   });
 
-  describe("toSnapshot", () => {
-    it("keeps only core issue fields", () => {
-      expect(CodecksUtils.toSnapshot(unfurl())).toEqual({
-        type: UnfurlResourceType.Issue,
-        url: "https://ruiner.codecks.io/card/16a-document-how-things-work",
-        id: "$16a",
-        title: "Document how things work.",
-        description: null,
-        author: { name: "", avatarUrl: "" },
-        labels: [],
-        state: { name: "opened", color: "#1f75cb" },
-        createdAt: "2026-11-01T00:00:00.000Z",
-      });
-    });
-
-    it("is deterministic", () => {
-      expect(CodecksUtils.toSnapshot(unfurl())).toEqual(
-        CodecksUtils.toSnapshot(unfurl())
-      );
-    });
-
-    it("does not change for status changes short of completion", () => {
-      const blocked = unfurl();
-      blocked.codecks!.derivedStatus = "blocked";
-      expect(CodecksUtils.toSnapshot(blocked)).toEqual(
-        CodecksUtils.toSnapshot(unfurl())
-      );
-    });
-
+  describe("isClosed", () => {
     it.each([
-      ["done", "done"],
-      ["started", "heroDone"],
-      ["not_started", "archivedDone"],
-    ])("is closed for status %s and derived status %s", (status, derived) => {
-      const card = unfurl();
-      card.codecks!.status = status;
-      card.codecks!.derivedStatus = derived;
-      expect(CodecksUtils.toSnapshot(card).state.name).toEqual("closed");
-    });
-
-    it("produces a valid snapshot", () => {
-      expect(CodecksUtils.isSnapshot(CodecksUtils.toSnapshot(unfurl()))).toBe(
-        true
-      );
-    });
+      ["done", "done", true],
+      ["started", "heroDone", true],
+      ["not_started", "archivedDone", true],
+      ["started", "blocked", false],
+      ["not_started", "hero", false],
+    ])(
+      "for status %s and derived status %s is %s",
+      (status, derivedStatus, closed) => {
+        const card = unfurl();
+        card.codecks!.status = status;
+        card.codecks!.derivedStatus = derivedStatus;
+        expect(CodecksUtils.isClosed(card)).toBe(closed);
+      }
+    );
   });
 
   describe("isSnapshot", () => {

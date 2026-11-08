@@ -1,15 +1,22 @@
 import { randomUUID } from "node:crypto";
 import {
+  CollectionPermission,
+  DocumentPermission,
   IntegrationService,
   IntegrationType,
   UnfurlResourceType,
   type IntegrationSettings,
 } from "@shared/types";
-import { Integration, IntegrationAuthentication } from "@server/models";
+import {
+  Integration,
+  IntegrationAuthentication,
+  UserMembership,
+} from "@server/models";
 import {
   buildAdmin,
   buildApiKey,
   buildCollection,
+  buildDocument,
   buildGuestUser,
   buildPersonalCollection,
   buildTeam,
@@ -25,6 +32,7 @@ import {
   CodecksErrorCode,
   type CodecksCard,
 } from "../codecks";
+import { presentCard } from "../presenters";
 
 const server = getTestServer();
 
@@ -505,5 +513,424 @@ describe("#integrations.list", () => {
     expect(settings).toBeDefined();
     expect(settings).not.toHaveProperty("codecks");
     expect(settings).not.toHaveProperty("codecksMappings");
+  });
+});
+
+describe("#codecks.search", () => {
+  const recent = { $order: "-lastUpdatedAt", $limit: 10 };
+
+  function mockDecks(decks: Record<string, string[]>) {
+    return vi.spyOn(Codecks, "listProjectsWithDecks").mockResolvedValue(
+      Object.entries(decks).map(([id, deckIds]) => ({
+        id,
+        name: "Project",
+        decks: deckIds.map((deckId) => ({
+          id: deckId,
+          title: deckId,
+          coverColor: null,
+        })),
+      }))
+    );
+  }
+
+  function cardsKey(filter: object) {
+    return `cards(${JSON.stringify(filter)})`;
+  }
+
+  it("should require authentication", async () => {
+    const res = await server.post("/api/codecks.search", {
+      body: { query: "" },
+    });
+
+    expect(res.status).toEqual(401);
+  });
+
+  it("should not allow guests", async () => {
+    const { team, collection } = await buildConnectedTeam();
+    const guest = await buildGuestUser({ teamId: team.id });
+    await UserMembership.create({
+      createdById: guest.id,
+      collectionId: collection.id,
+      userId: guest.id,
+      permission: CollectionPermission.Read,
+    });
+    const search = vi.spyOn(Codecks, "searchCards");
+
+    const res = await server.post("/api/codecks.search", guest, {
+      body: { query: "" },
+    });
+
+    expect(res.status).toEqual(403);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("should find nothing when Codecks is not connected", async () => {
+    const user = await buildUser();
+    const list = vi.spyOn(Codecks, "listProjectsWithDecks");
+    const search = vi.spyOn(Codecks, "searchCards");
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: "" },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data).toEqual([]);
+    expect(list).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("should present the matching cards", async () => {
+    const { team, account, mapping } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    const card = buildCard(mapping.projectId);
+    mockDecks({ [mapping.projectId]: ["deck-1", "deck-2"] });
+    const search = vi.spyOn(Codecks, "searchCards").mockResolvedValue([card]);
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: "  document  " },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data).toEqual([presentCard(card, account.subdomain)]);
+    expect(body.data[0]).toMatchObject({
+      type: UnfurlResourceType.Issue,
+      url: cardUrl,
+      id: "$16a",
+      codecks: { shortId: "16a", project: { id: mapping.projectId } },
+    });
+    expect(search).toHaveBeenCalledWith(
+      {
+        token: "cdxat_previous",
+        subdomain: account.subdomain,
+        accountId: account.id,
+      },
+      { deckIds: ["deck-1", "deck-2"], query: "document", limit: 10 }
+    );
+  });
+
+  it("should only search projects of collections the user can read", async () => {
+    const { team, admin, account, mapping, integration } =
+      await buildConnectedTeam();
+    const privateCollection = await buildCollection({
+      teamId: team.id,
+      userId: admin.id,
+      permission: null,
+    });
+    const secret: CodecksMapping = {
+      projectId: randomUUID(),
+      projectName: "Secret",
+      collectionId: privateCollection.id,
+      defaultDeckId: null,
+    };
+    integration.settings = {
+      codecks: { account },
+      codecksMappings: [mapping, secret],
+    };
+    await integration.save();
+    const user = await buildUser({ teamId: team.id });
+    mockDecks({
+      [mapping.projectId]: ["deck-1"],
+      [secret.projectId]: ["deck-secret"],
+    });
+    const visible = buildCard(mapping.projectId);
+    const search = vi
+      .spyOn(Codecks, "searchCards")
+      .mockResolvedValue([
+        visible,
+        { ...buildCard(secret.projectId), accountSeq: 151 },
+        { ...buildCard(randomUUID()), accountSeq: 152 },
+        { ...buildCard(mapping.projectId), accountSeq: 153, project: null },
+      ]);
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: "" },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(search.mock.calls[0][1].deckIds).toEqual(["deck-1"]);
+    expect(body.data).toEqual([presentCard(visible, account.subdomain)]);
+  });
+
+  it("should narrow results to the projects of the document's collection", async () => {
+    const { team, admin, account, mapping, integration } =
+      await buildConnectedTeam();
+    const art = await buildCollection({ teamId: team.id, userId: admin.id });
+    const artMapping: CodecksMapping = {
+      projectId: randomUUID(),
+      projectName: "Art",
+      collectionId: art.id,
+      defaultDeckId: null,
+    };
+    integration.settings = {
+      codecks: { account },
+      codecksMappings: [mapping, artMapping],
+    };
+    await integration.save();
+    const user = await buildUser({ teamId: team.id });
+    const document = await buildDocument({
+      teamId: team.id,
+      userId: admin.id,
+      collectionId: art.id,
+    });
+    mockDecks({
+      [mapping.projectId]: ["deck-1"],
+      [artMapping.projectId]: ["deck-art"],
+    });
+    const search = vi
+      .spyOn(Codecks, "searchCards")
+      .mockResolvedValue([buildCard(mapping.projectId)]);
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: "", documentId: document.urlId },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(search.mock.calls[0][1].deckIds).toEqual(["deck-art"]);
+    expect(body.data).toEqual([]);
+  });
+
+  it("should search every allowed project when the document's collection is not mapped", async () => {
+    const { team, admin, mapping } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    const document = await buildDocument({ teamId: team.id, userId: admin.id });
+    mockDecks({ [mapping.projectId]: ["deck-1"] });
+    const search = vi.spyOn(Codecks, "searchCards").mockResolvedValue([]);
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: "", documentId: document.id },
+    });
+
+    expect(res.status).toEqual(200);
+    expect(search.mock.calls[0][1].deckIds).toEqual(["deck-1"]);
+  });
+
+  it("should not widen results to a collection the user cannot read", async () => {
+    const { team, admin, account, mapping, integration } =
+      await buildConnectedTeam();
+    const privateCollection = await buildCollection({
+      teamId: team.id,
+      userId: admin.id,
+      permission: null,
+    });
+    integration.settings = {
+      codecks: { account },
+      codecksMappings: [
+        mapping,
+        {
+          projectId: randomUUID(),
+          projectName: "Secret",
+          collectionId: privateCollection.id,
+          defaultDeckId: null,
+        },
+      ],
+    };
+    await integration.save();
+    const user = await buildUser({ teamId: team.id });
+    const document = await buildDocument({
+      teamId: team.id,
+      userId: admin.id,
+      collectionId: privateCollection.id,
+    });
+    await UserMembership.create({
+      createdById: admin.id,
+      documentId: document.id,
+      userId: user.id,
+      permission: DocumentPermission.Read,
+    });
+    const list = mockDecks({ [mapping.projectId]: ["deck-1"] });
+    const search = vi.spyOn(Codecks, "searchCards");
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: "", documentId: document.id },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data).toEqual([]);
+    expect(list).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("should reject a document the user cannot read", async () => {
+    const { team } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    const document = await buildDocument();
+    const search = vi.spyOn(Codecks, "searchCards");
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: "", documentId: document.id },
+    });
+
+    expect(res.status).toEqual(403);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("should keep a query a literal value of the Codecks filter", async () => {
+    const { team, mapping } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    mockDecks({ [mapping.projectId]: ["deck-1"] });
+    const query = vi
+      .spyOn(Codecks, "query")
+      .mockResolvedValue({ _root: { account: "account-1" } });
+    const text = `"}),cards({"visibility":"deleted","deckId":"x"}),{"a":"\\"`;
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: text },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data).toEqual([]);
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][1]).toEqual([
+      {
+        [cardsKey({
+          deckId: { op: "in", value: ["deck-1"] },
+          visibility: "default",
+          title: { op: "contains", value: text },
+          ...recent,
+        })]: expect.any(Array),
+      },
+    ]);
+  });
+
+  it("should limit the length of a query", async () => {
+    const { team, mapping } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    mockDecks({ [mapping.projectId]: ["deck-1"] });
+    const search = vi.spyOn(Codecks, "searchCards").mockResolvedValue([]);
+
+    const tooLong = await server.post("/api/codecks.search", user, {
+      body: { query: "a".repeat(101) },
+    });
+
+    expect(tooLong.status).toEqual(400);
+    expect(search).not.toHaveBeenCalled();
+
+    const longest = await server.post("/api/codecks.search", user, {
+      body: { query: ` ${"a".repeat(100)} ` },
+    });
+
+    expect(longest.status).toEqual(200);
+    expect(search.mock.calls[0][1].query).toEqual("a".repeat(100));
+  });
+
+  it("should find a card by its short id first", async () => {
+    const { team, mapping } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    mockDecks({ [mapping.projectId]: ["deck-1"] });
+    const row = { visibility: "default", deck: "deck-1" };
+    const query = vi.spyOn(Codecks, "query").mockResolvedValue({
+      _root: { account: "account-1" },
+      card: {
+        "card-200": {
+          ...row,
+          cardId: "card-200",
+          accountSeq: 200,
+          title: "Explain 16a",
+          lastUpdatedAt: "2026-02-01T00:00:00.000Z",
+        },
+        "card-150": {
+          ...row,
+          cardId: "card-150",
+          accountSeq: 150,
+          title: "Document how things work",
+          lastUpdatedAt: "2025-01-01T00:00:00.000Z",
+        },
+      },
+      deck: { "deck-1": { title: "Backlog", project: mapping.projectId } },
+      project: { [mapping.projectId]: { name: "Game" } },
+    });
+    const scope = {
+      deckId: { op: "in", value: ["deck-1"] },
+      visibility: "default",
+    };
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: "16a" },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(2);
+    expect(body.data[0]).toMatchObject({ id: "$16a", url: cardUrl });
+    expect(body.data[1]).toMatchObject({ title: "Explain 16a" });
+    expect(query.mock.calls[0][1]).toEqual([
+      {
+        [cardsKey({ ...scope, accountSeq: { op: "in", value: [150] } })]:
+          expect.any(Array),
+      },
+      {
+        [cardsKey({
+          ...scope,
+          title: { op: "contains", value: "16a" },
+          ...recent,
+        })]: expect.any(Array),
+      },
+    ]);
+  });
+
+  it("should find nothing for the start of a short id", async () => {
+    const { team, mapping } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    mockDecks({ [mapping.projectId]: ["deck-1"] });
+    const query = vi.spyOn(Codecks, "query");
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: "16" },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data).toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("should cache the decks of the organization", async () => {
+    const { team, mapping } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    const list = mockDecks({ [mapping.projectId]: ["deck-1"] });
+    const search = vi.spyOn(Codecks, "searchCards").mockResolvedValue([]);
+
+    for (const query of ["a", "b"]) {
+      const res = await server.post("/api/codecks.search", user, {
+        body: { query },
+      });
+      expect(res.status).toEqual(200);
+    }
+
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it("should return a fixed message when Codecks fails", async () => {
+    const { team, mapping } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    mockDecks({ [mapping.projectId]: ["deck-1"] });
+    vi.spyOn(Codecks, "searchCards")
+      .mockRejectedValueOnce(new Error("upstream detail"))
+      .mockRejectedValueOnce(
+        new CodecksError(CodecksErrorCode.RateLimited, 429)
+      );
+
+    const failed = await server.post("/api/codecks.search", user, {
+      body: { query: "" },
+    });
+    const failedBody = await failed.json();
+    const limited = await server.post("/api/codecks.search", user, {
+      body: { query: "" },
+    });
+    const limitedBody = await limited.json();
+
+    expect(failed.status).toEqual(400);
+    expect(failedBody.message).not.toContain("upstream detail");
+    expect(limited.status).toEqual(400);
+    expect(limitedBody.message).toEqual(
+      new CodecksError(CodecksErrorCode.RateLimited).message
+    );
   });
 });

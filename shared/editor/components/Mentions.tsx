@@ -247,7 +247,10 @@ export const MentionURL = observer((props: IssueUrlProps) => {
 
         // We got a result back from the server, so update the unfurl in the node attributes.
         if (unfurlModel) {
-          onChangeUnfurl(toPersistedUnfurl(unfurlModel.data, renderer));
+          const persisted = toPersistedUnfurl(unfurlModel.data, renderer);
+          if (persisted) {
+            onChangeUnfurl(persisted);
+          }
           return;
         }
 
@@ -364,7 +367,10 @@ export const MentionIssue = observer((props: IssuePrProps) => {
       }
 
       if (unfurlModel) {
-        onChangeUnfurl(toPersistedUnfurl(unfurlModel.data, renderer));
+        const persisted = toPersistedUnfurl(unfurlModel.data, renderer);
+        if (persisted) {
+          onChangeUnfurl(persisted);
+        }
       }
 
       setLoaded(true);

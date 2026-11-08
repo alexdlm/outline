@@ -138,36 +138,8 @@ export class CodecksUtils {
   }
 
   /**
-   * Reduces a card unfurl to the snapshot stored on the mention. It holds only
-   * core issue fields, so it renders without the plugin and reveals nothing
-   * beyond the card title, and it only changes when the card is completed or
-   * reopened so that viewers don't keep rewriting the document.
-   *
-   * @param unfurl the card unfurl.
-   * @returns the snapshot to store.
-   */
-  public static toSnapshot(unfurl: IssueUnfurl): IssueUnfurl {
-    const closed = CodecksUtils.isClosed(unfurl);
-
-    return {
-      type: UnfurlResourceType.Issue,
-      url: unfurl.url,
-      id: unfurl.id,
-      title: unfurl.title,
-      description: null,
-      author: { name: "", avatarUrl: "" },
-      labels: [],
-      state: {
-        name: closed ? "closed" : "opened",
-        color: closed ? ClosedColor : OpenedColor,
-      },
-      createdAt: unfurl.createdAt,
-    };
-  }
-
-  /**
-   * Whether a value stored on a mention is a usable issue snapshot. Stored
-   * values may come from older versions or from before this plugin existed.
+   * Whether a value stored on a mention is a usable issue snapshot. This plugin
+   * stores none, but mentions made before it existed may hold one.
    *
    * @param value the stored value.
    * @returns true if the value can be rendered as an issue.
@@ -217,7 +189,3 @@ const MaxAccountSeq = 2 ** 31 - 1;
 const ShortIdPattern = /^[1-9acefghijkoqrsuvwxyz]{3,8}$/;
 const SubdomainPattern = /^[a-z0-9-]{1,63}$/;
 const ReservedSubdomains = new Set(["api", "www", "manual", "open", "mcp"]);
-
-// Colors for the snapshot state that renders without the plugin.
-const OpenedColor = "#1f75cb";
-const ClosedColor = "#3fb950";

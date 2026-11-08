@@ -15,12 +15,12 @@ import type { IssueRenderer } from "../types";
  *
  * @param data the unfurl returned for the current viewer.
  * @param renderer the plugin renderer for the mention's URL, if any.
- * @returns the unfurl to store on the node.
+ * @returns the unfurl to store on the node, or undefined to store nothing.
  */
 export function toPersistedUnfurl(
   data: UnfurlResponse[keyof UnfurlResponse],
   renderer?: Pick<IssueRenderer, "persistedUnfurl">
-): UnfurlResponse[keyof UnfurlResponse] {
+): UnfurlResponse[keyof UnfurlResponse] | undefined {
   if (data.type === UnfurlResourceType.Issue) {
     if (renderer?.persistedUnfurl) {
       return renderer.persistedUnfurl(data);

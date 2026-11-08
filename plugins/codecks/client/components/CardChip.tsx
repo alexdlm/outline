@@ -39,15 +39,14 @@ export function CardChip({
     void LazyCardHoverPreview.preload();
   }, []);
 
-  const snapshot = CodecksUtils.isSnapshot(storedUnfurl)
-    ? storedUnfurl
-    : undefined;
+  const card = unfurl;
 
-  // The stored snapshot is shared by every viewer, so it only stands in until
-  // this viewer's own unfurl has loaded.
-  const card = unfurl ?? (loaded ? undefined : snapshot);
-
+  // Until this viewer's unfurl loads, or when they may not see the card, the
+  // short id is shown, with the title of mentions made before this plugin.
   if (!card) {
+    const snapshot = CodecksUtils.isSnapshot(storedUnfurl)
+      ? storedUnfurl
+      : undefined;
     const shortId = CodecksUtils.parseCardUrl(href)?.shortId;
     const id = shortId ? `$${shortId}` : undefined;
     const title =
@@ -65,6 +64,7 @@ export function CardChip({
             ? [title, id].filter(Boolean).join(", ")
             : t("Codecks card {{ id }}", { id: id ?? href })
         }
+        aria-busy={!loaded}
       >
         <CodecksIcon size={14} />
         {title || !id ? (
@@ -84,9 +84,7 @@ export function CardChip({
   const assignee = details?.assignee ?? null;
   const deck = details?.deck ?? null;
   const effort = details?.effort ?? null;
-  const hero =
-    !!details &&
-    (details.childCount > 0 || !!details.derivedStatus?.startsWith("hero"));
+  const hero = !!details && details.childCount > 0;
 
   const ariaLabel = [
     card.title,

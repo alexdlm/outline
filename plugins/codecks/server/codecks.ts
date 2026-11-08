@@ -47,6 +47,16 @@ export interface CodecksCard {
   milestone: { name: string; color: string | null } | null;
 }
 
+/** What Codecks.searchCards looks for. */
+export interface CodecksCardSearch {
+  /** The decks to search, cards of other decks are never returned. */
+  deckIds: string[];
+  /** A short id such as "16a", part of a title, or empty for recent cards. */
+  query: string;
+  /** The most cards to return. */
+  limit: number;
+}
+
 /** The reasons a request to Codecks fails. */
 export enum CodecksErrorCode {
   Unauthorized = "unauthorized",
@@ -329,6 +339,84 @@ export class Codecks {
     return Codecks.readCards(response, requested);
   }
 
+  /**
+   * Searches the cards of some decks that are neither archived nor deleted.
+   * An empty query finds the most recently updated cards. A complete short id
+   * finds that card first, followed by cards whose title contains it. Any
+   * other query that starts with a digit finds nothing, since it is the start
+   * of a short id or an amount, and the remaining queries match titles.
+   *
+   * @param connection the token and organization to query.
+   * @param search the decks to search, the query and the most cards to return.
+   * @returns the cards, an exact short id match first and then the most recently updated.
+   * @throws CodecksError if the request fails.
+   */
+  public static async searchCards(
+    connection: CodecksConnection,
+    search: CodecksCardSearch
+  ): Promise<CodecksCard[]> {
+    const deckIds = [...new Set(search.deckIds)];
+    const query = search.query.trim();
+    const limit = Math.min(
+      Math.max(Math.floor(search.limit), 1),
+      MaxSearchLimit
+    );
+    const exactSeq = query ? CodecksUtils.decodeShortId(query) : undefined;
+    if (
+      deckIds.length === 0 ||
+      (exactSeq === undefined && DigitLedPattern.test(query))
+    ) {
+      return [];
+    }
+
+    const scope: CardSearchFilter = {
+      deckId: { op: "in", value: deckIds },
+      visibility: SearchVisibility,
+    };
+    const cards = (filter: CardSearchFilter): QueryRelation => ({
+      [`cards(${JSON.stringify(filter)})`]: CardFields,
+    });
+
+    const fields: QueryField[] = [];
+    if (exactSeq !== undefined) {
+      fields.push(
+        cards({ ...scope, accountSeq: { op: "in", value: [exactSeq] } })
+      );
+    }
+    fields.push(
+      cards({
+        ...scope,
+        ...(query ? { title: { op: "contains", value: query } } : {}),
+        $order: SearchOrder,
+        $limit: limit,
+      })
+    );
+
+    const response = await Codecks.query(connection, fields);
+
+    // Parent cards share the card rows but only hold the fields asked for
+    // parents, so results are the rows of a searched deck and visibility.
+    const searchedDecks = new Set(deckIds);
+    const rows = Codecks.rows(response, Models.Card, CardRowSchema);
+    const found = new Set<number>();
+    for (const row of rows.values()) {
+      if (
+        row.visibility === SearchVisibility &&
+        row.deck &&
+        searchedDecks.has(row.deck)
+      ) {
+        found.add(row.accountSeq);
+      }
+    }
+
+    const isExact = (card: CodecksCard) => Number(card.accountSeq === exactSeq);
+    const updatedAt = (card: CodecksCard) =>
+      card.lastUpdatedAt ? Date.parse(card.lastUpdatedAt) : 0;
+    return Codecks.readCards(response, found)
+      .sort((a, b) => isExact(b) - isExact(a) || updatedAt(b) - updatedAt(a))
+      .slice(0, limit);
+  }
+
   private static async request(
     connection: CodecksConnection,
     path: string,
@@ -570,9 +658,21 @@ interface CardsFilter {
   accountSeq: { op: "in"; value: number[] };
 }
 
-// The field and model names below are taken from the Codecks API reference
-// and have not been verified against the live API yet. Adjust them here if a
-// query is rejected.
+// Search filters only ever hold typed values and are serialised with
+// JSON.stringify, so a search query stays a string value and can't change
+// which decks or cards the filter selects.
+interface CardSearchFilter {
+  deckId: { op: "in"; value: string[] };
+  visibility: typeof SearchVisibility;
+  accountSeq?: { op: "in"; value: number[] };
+  title?: { op: "contains"; value: string };
+  $order?: string;
+  $limit?: number;
+}
+
+// The field and model names below follow the Codecks API reference and were
+// checked against the live API in November 2026. Adjust them here if Codecks
+// starts rejecting a query.
 
 /** The model names that response rows are grouped by. */
 const Models = {
@@ -608,6 +708,23 @@ const CardFields: QueryField[] = [
   { deck: DeckFields },
   { milestone: ["name", "color"] },
 ];
+
+// Search is scoped by deck, since a card belongs to the project of its deck
+// and cards are only known to filter by their own fields. Checked against the
+// live API: "in" applies to deckId, a "-" prefix orders descending, and
+// "contains" ignores case.
+
+/** Searches skip archived and deleted cards. */
+const SearchVisibility = "default";
+
+/** Searches find the most recently updated cards first. */
+const SearchOrder = "-lastUpdatedAt";
+
+/** The most cards one search returns. */
+const MaxSearchLimit = 25;
+
+/** A search that starts with a digit and is not a short id finds nothing. */
+const DigitLedPattern = /^\d/;
 
 // Response rows are parsed leniently: unknown keys are ignored, enums are
 // read as strings and a field of an unexpected type is treated as missing.

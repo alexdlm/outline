@@ -57,6 +57,13 @@ describe("toPersistedUnfurl", () => {
     expect(persistedUnfurl).toHaveBeenCalledWith(issue);
   });
 
+  it("stores nothing when the renderer's reducer returns nothing", () => {
+    const persistedUnfurl = vi.fn(() => undefined);
+
+    expect(toPersistedUnfurl(issue, { persistedUnfurl })).toBeUndefined();
+    expect(persistedUnfurl).toHaveBeenCalledWith(issue);
+  });
+
   it("falls back to the core fields when the renderer has no reducer", () => {
     expect(toPersistedUnfurl(issue, {})).toEqual({
       ...issue,

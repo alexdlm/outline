@@ -23,7 +23,6 @@ import {
 } from "@server/test/factories";
 import { server } from "@server/test/msw";
 import { CacheHelper } from "@server/utils/CacheHelper";
-import { CodecksUtils } from "../shared/CodecksUtils";
 import type { CodecksAccount } from "../shared/types";
 import { CardLoader } from "./CardLoader";
 import {
@@ -804,13 +803,175 @@ describe("presentCard", () => {
     expect(unfurl.codecks?.deck?.coverColor).toBeNull();
   });
 
-  it("should use the coarse state of the stored snapshot", () => {
+  it("should present a coarse state for renderers without Codecks support", () => {
     const open = presentCard(buildCard(), subdomain);
     const done = presentCard(buildCard({ status: "done" }), subdomain);
 
-    expect(open.state).toEqual(CodecksUtils.toSnapshot(open).state);
+    expect(open.state.name).toEqual("opened");
     expect(done.state.name).toEqual("closed");
-    expect(done.state).toEqual(CodecksUtils.toSnapshot(done).state);
-    expect(CodecksUtils.toSnapshot(done)).not.toHaveProperty("codecks");
+  });
+});
+
+describe("Codecks.searchCards", () => {
+  const connection = { token, subdomain };
+  const deckIds = ["deck-1", "deck-2"];
+  const scope = { deckId: { op: "in", value: deckIds }, visibility: "default" };
+  const recent = { $order: "-lastUpdatedAt", $limit: 10 };
+
+  /** Reads the card filters back from the relation keys of a query. */
+  function cardFilters(fields: Parameters<typeof Codecks.query>[1]) {
+    return fields.flatMap((field) =>
+      typeof field === "string"
+        ? []
+        : Object.keys(field).map((key): unknown => {
+            const match = /^cards\((.*)\)$/.exec(key);
+            return match ? JSON.parse(match[1]) : key;
+          })
+    );
+  }
+
+  function searchRow(accountSeq: number, overrides: object = {}) {
+    return {
+      cardId: `card-${accountSeq}`,
+      accountSeq,
+      title: `Card ${accountSeq}`,
+      content: `Card ${accountSeq}`,
+      status: "started",
+      visibility: "default",
+      lastUpdatedAt: "2026-01-01T00:00:00.000Z",
+      deck: "deck-1",
+      ...overrides,
+    };
+  }
+
+  function searchResponse(cards: Record<string, object>) {
+    return {
+      _root: { account: "account-1" },
+      card: cards,
+      deck: {
+        "deck-1": { id: "deck-1", title: "Backlog", project: "project-1" },
+        "deck-3": { id: "deck-3", title: "Elsewhere", project: "project-2" },
+      },
+      project: {
+        "project-1": { id: "project-1", name: "Game" },
+        "project-2": { id: "project-2", name: "Art" },
+      },
+    };
+  }
+
+  it("should list the most recently updated cards for an empty query", async () => {
+    const query = vi.spyOn(Codecks, "query").mockResolvedValue(
+      searchResponse({
+        "card-1": searchRow(1, { lastUpdatedAt: "2026-01-01T00:00:00.000Z" }),
+        "card-2": searchRow(2, { lastUpdatedAt: "2026-03-01T00:00:00.000Z" }),
+      })
+    );
+
+    const cards = await Codecks.searchCards(connection, {
+      deckIds,
+      query: "  ",
+      limit: 10,
+    });
+
+    expect(cards.map((card) => card.accountSeq)).toEqual([2, 1]);
+    expect(cards[0].project).toEqual({ id: "project-1", name: "Game" });
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toEqual(connection);
+    expect(cardFilters(query.mock.calls[0][1])).toEqual([
+      { ...scope, ...recent },
+    ]);
+  });
+
+  it("should keep a query a literal value of the filter", async () => {
+    const text = `x"}),cards({"deckId":"other"}) {"visibility":"deleted"} \\"`;
+    const query = vi
+      .spyOn(Codecks, "query")
+      .mockResolvedValue(searchResponse({}));
+
+    await Codecks.searchCards(connection, { deckIds, query: text, limit: 10 });
+
+    const fields = query.mock.calls[0][1];
+    expect(fields).toHaveLength(1);
+    expect(cardFilters(fields)).toEqual([
+      { ...scope, title: { op: "contains", value: text }, ...recent },
+    ]);
+  });
+
+  it("should send a query as a literal value to Codecks", async () => {
+    const text = `"}) {"$or":[{"deckId":"other"}]}`;
+    const calls = mockApi(() => HttpResponse.json(searchResponse({})));
+
+    await Codecks.searchCards(connection, { deckIds, query: text, limit: 10 });
+
+    const body = await calls.requests[0].json();
+    const keys = Object.keys(body.query._root[0].account[0]);
+    expect(keys).toHaveLength(1);
+    expect(JSON.parse(keys[0].slice("cards(".length, -1))).toEqual({
+      ...scope,
+      title: { op: "contains", value: text },
+      ...recent,
+    });
+  });
+
+  it("should find a card by its short id first", async () => {
+    const query = vi.spyOn(Codecks, "query").mockResolvedValue(
+      searchResponse({
+        "card-150": searchRow(150, {
+          lastUpdatedAt: "2025-01-01T00:00:00.000Z",
+          parentCard: "card-1",
+        }),
+        "card-200": searchRow(200, { title: "Explain 16a" }),
+        "card-1": { cardId: "card-1", accountSeq: 1, title: "Parent" },
+        "card-300": searchRow(300, { visibility: "archived" }),
+        "card-400": searchRow(400, { deck: "deck-3" }),
+      })
+    );
+
+    const cards = await Codecks.searchCards(connection, {
+      deckIds,
+      query: "16A",
+      limit: 10,
+    });
+
+    expect(cards.map((card) => card.accountSeq)).toEqual([150, 200]);
+    expect(cards[0].parent).toEqual({ accountSeq: 1, title: "Parent" });
+    expect(cardFilters(query.mock.calls[0][1])).toEqual([
+      { ...scope, accountSeq: { op: "in", value: [150] } },
+      { ...scope, title: { op: "contains", value: "16A" }, ...recent },
+    ]);
+  });
+
+  it("should find nothing for the start of a short id or an amount", async () => {
+    const query = vi.spyOn(Codecks, "query");
+
+    for (const text of ["1", "16", "100", "5 per hour", "16a b"]) {
+      await expect(
+        Codecks.searchCards(connection, { deckIds, query: text, limit: 10 })
+      ).resolves.toEqual([]);
+    }
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("should not query without decks and cap the limit", async () => {
+    const query = vi.spyOn(Codecks, "query").mockResolvedValue(
+      searchResponse({
+        "card-1": searchRow(1),
+        "card-2": searchRow(2),
+        "card-3": searchRow(3),
+      })
+    );
+
+    await expect(
+      Codecks.searchCards(connection, { deckIds: [], query: "", limit: 10 })
+    ).resolves.toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+
+    await expect(
+      Codecks.searchCards(connection, { deckIds, query: "", limit: 2 })
+    ).resolves.toHaveLength(2);
+    await Codecks.searchCards(connection, { deckIds, query: "", limit: 1000 });
+    expect(cardFilters(query.mock.calls[1][1])).toEqual([
+      { ...scope, $order: "-lastUpdatedAt", $limit: 25 },
+    ]);
   });
 });

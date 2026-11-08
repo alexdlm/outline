@@ -255,9 +255,10 @@ export interface IssueRenderer {
   HoverPreview: LazyRenderer<IssueHoverPreviewProps>;
   /**
    * Reduces an unfurl before it is stored on the node, which every viewer of the
-   * document can read. Must return a complete issue unfurl and be deterministic.
+   * document can read. Must return a complete issue unfurl and be deterministic,
+   * or undefined to store nothing and leave the mention as it was inserted.
    */
   persistedUnfurl?: (
     unfurl: UnfurlResponse[UnfurlResourceType.Issue]
-  ) => UnfurlResponse[UnfurlResourceType.Issue];
+  ) => UnfurlResponse[UnfurlResourceType.Issue] | undefined;
 }

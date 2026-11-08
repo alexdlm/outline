@@ -26,6 +26,14 @@ export type CodecksMapping = {
 /** A Codecks card priority: a is high, b is medium and c is low. */
 export type CodecksPriority = "a" | "b" | "c";
 
+/** The hero card that a card is a sub card of. */
+export type CodecksCardParent = {
+  title: string;
+  /** The parent's short id without the "$" prefix. */
+  shortId: string;
+  url: string;
+};
+
 /** The live details of a card that only the Codecks renderer uses, never persisted. */
 export type CodecksCardDetails = {
   /** The card's number within the organization. */
@@ -43,7 +51,7 @@ export type CodecksCardDetails = {
   visibility: string;
   /** The number of sub cards, a card with any is a hero card. */
   childCount: number;
-  parent: { title: string; shortId: string; url: string } | null;
+  parent: CodecksCardParent | null;
   assignee: { name: string; avatarUrl: string | null } | null;
   deck: { title: string; coverColor: string | null } | null;
   project: { id: string; name: string } | null;
@@ -81,6 +89,7 @@ declare module "@shared/types" {
   }
 
   interface IssueUnfurlExtensions {
+    /** Live card details, never stored in documents. */
     codecks?: CodecksCardDetails;
   }
 }

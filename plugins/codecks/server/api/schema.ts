@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BaseSchema } from "@server/routes/api/schema";
+import { zodIdType } from "@server/utils/zod";
 import { CodecksMappingSchema } from "../gate";
 
 /** The request to connect a Codecks organization, or to replace its token. */
@@ -50,3 +51,16 @@ export const CodecksUpdateSchema = BaseSchema.extend({
 });
 
 export type CodecksUpdateReq = z.infer<typeof CodecksUpdateSchema>;
+
+/** The request to search the cards that a user may mention. */
+export const CodecksSearchSchema = BaseSchema.extend({
+  body: z.object({
+    /** A short id, part of a card title, or empty for recently updated cards. */
+    query: z.string().trim().max(100).default(""),
+
+    /** The document being edited, results are narrowed to its collection's projects. */
+    documentId: zodIdType().optional(),
+  }),
+});
+
+export type CodecksSearchReq = z.infer<typeof CodecksSearchSchema>;
