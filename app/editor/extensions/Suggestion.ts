@@ -77,7 +77,8 @@ export default class Suggestion<
         this.openRegex,
         this.enabledInMarks,
         this.triggerLength,
-        this.options.allowSpaces
+        this.options.allowSpaces,
+        () => this.isEnabled()
       ),
     ];
   }
@@ -113,6 +114,7 @@ export default class Suggestion<
         const { parent } = state.selection.$from;
         if (
           match &&
+          this.isEnabled() &&
           (parent.type.name === "paragraph" ||
             parent.type.name === "heading") &&
           (!isInCode(state) || this.options.enabledInCode) &&
@@ -125,20 +127,32 @@ export default class Suggestion<
           // inside that window, so defer until the view has re-synced. The
           // cursor is read at that point too, as the typed character has not
           // been inserted yet when the rule runs.
-          setTimeout(
-            () =>
-              applyMatch(this.state, match, {
-                triggerLength: this.triggerLength,
-                cursorPos: this.editor.view.state.selection.from,
-                canOpen: true,
-              }),
-            0
-          );
+          setTimeout(() => {
+            if (!this.isEnabled()) {
+              return;
+            }
+
+            applyMatch(this.state, match, {
+              triggerLength: this.triggerLength,
+              cursorPos: this.editor.view.state.selection.from,
+              canOpen: true,
+            });
+          }, 0);
         }
         return null;
       }
     ),
   ];
+
+  /**
+   * Whether the menu may currently open. It is checked each time a trigger is
+   * typed, outside of any MobX reaction, so it must stay cheap.
+   *
+   * @returns true if the menu may open.
+   */
+  protected isEnabled(): boolean {
+    return true;
+  }
 
   protected openRegex: RegExp;
 

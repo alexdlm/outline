@@ -86,12 +86,24 @@ export const applyMatch = action(
 );
 
 export class SuggestionsMenuPlugin extends Plugin<PluginState> {
+  /**
+   * Creates the plugin that opens a suggestion menu as its trigger is typed.
+   *
+   * @param extensionState The observable state of the menu.
+   * @param openRegex The pattern that matches a trigger and its search term.
+   * @param enabledInMarks Whether the menu may open on a marked trigger.
+   * @param triggerLength The length of the trigger in characters.
+   * @param allowSpaces Whether the search term may contain spaces.
+   * @param isEnabled Whether the menu may currently open or capture keys,
+   * evaluated each time it is needed.
+   */
   constructor(
     extensionState: ExtensionState,
     openRegex: RegExp,
     enabledInMarks: boolean,
     triggerLength: number,
-    allowSpaces: boolean
+    allowSpaces: boolean,
+    isEnabled: () => boolean = () => true
   ) {
     const key = new PluginKey<PluginState>("suggestions-menu");
 
@@ -213,6 +225,7 @@ export class SuggestionsMenuPlugin extends Plugin<PluginState> {
               const match = openRegex.exec(textBefore);
               if (
                 match &&
+                isEnabled() &&
                 (enabledInMarks ||
                   !isTriggerMarked(state, fromPos, match, triggerLength))
               ) {
@@ -282,6 +295,7 @@ export class SuggestionsMenuPlugin extends Plugin<PluginState> {
                 action((state, match) => {
                   if (
                     match &&
+                    isEnabled() &&
                     (enabledInMarks ||
                       !isTriggerMarked(state, fromPos, match, triggerLength))
                   ) {
@@ -308,14 +322,15 @@ export class SuggestionsMenuPlugin extends Plugin<PluginState> {
           }
 
           // If the menu is open then just ignore the key events in the editor
-          // itself until we're done.
+          // itself until we're done. A disabled menu is not rendered, so it
+          // must never capture these keys even if it was left open.
           if (
             event.key === "Enter" ||
             event.key === "ArrowUp" ||
             event.key === "ArrowDown" ||
             event.key === "Tab"
           ) {
-            return extensionState.open;
+            return extensionState.open && isEnabled();
           }
 
           return false;

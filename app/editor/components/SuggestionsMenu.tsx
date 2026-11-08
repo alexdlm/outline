@@ -57,6 +57,13 @@ export type Props<T extends MenuItem = MenuItem> = {
     }
   ) => React.ReactNode;
   filterable?: boolean;
+  /**
+   * Whether Enter closes the menu and inserts a new line, instead of choosing
+   * the selected item, until the selection is moved. Useful where the trigger,
+   * or the trigger and the search text, are also common in ordinary text. It
+   * applies again whenever the search text changes.
+   */
+  enterClosesWhenUntouched?: boolean;
   items: T[];
 };
 
@@ -213,6 +220,10 @@ function SuggestionsMenu<T extends MenuItem>(props: Props<T>) {
     MenuItem | EmbedDescriptor
   >();
   const [selectedIndex, setSelectedIndex] = React.useState(0);
+
+  // Whether the user has moved, or tried to move, the selection since the menu
+  // opened or the search changed, see the enterClosesWhenUntouched prop.
+  const hasNavigatedRef = React.useRef(false);
   const [submenu, setSubmenu] = React.useState<SubmenuState | null>(null);
   const itemRefs = React.useRef<Map<number, HTMLElement>>(new Map());
   const submenuContentRef = React.useRef<HTMLDivElement>(null);
@@ -285,6 +296,7 @@ function SuggestionsMenu<T extends MenuItem>(props: Props<T>) {
 
   React.useEffect(() => {
     setSubmenu(null);
+    hasNavigatedRef.current = false;
 
     if (!props.isActive) {
       return;
@@ -297,6 +309,7 @@ function SuggestionsMenu<T extends MenuItem>(props: Props<T>) {
   React.useEffect(() => {
     setSelectedIndex(0);
     setSubmenu(null);
+    hasNavigatedRef.current = false;
   }, [props.search]);
 
   const handleClearSearch = React.useCallback(() => {
@@ -792,6 +805,11 @@ function SuggestionsMenu<T extends MenuItem>(props: Props<T>) {
       if (event.key === "Enter") {
         event.preventDefault();
 
+        if (props.enterClosesWhenUntouched && !hasNavigatedRef.current) {
+          props.onClose(true);
+          return;
+        }
+
         const item = filtered[selectedIndex];
 
         if (item) {
@@ -832,6 +850,9 @@ function SuggestionsMenu<T extends MenuItem>(props: Props<T>) {
         event.stopPropagation();
 
         if (filtered.length) {
+          // A single item cannot move, but the key still shows the user means
+          // to choose it.
+          hasNavigatedRef.current = true;
           let prevIndex = selectedIndex - 1;
           while (prevIndex >= 0) {
             const item = filtered[prevIndex];
@@ -860,6 +881,7 @@ function SuggestionsMenu<T extends MenuItem>(props: Props<T>) {
         event.stopPropagation();
 
         if (filtered.length) {
+          hasNavigatedRef.current = true;
           const total = filtered.length - 1;
           let nextIndex = selectedIndex + 1;
           while (nextIndex <= total) {
@@ -1001,6 +1023,7 @@ function SuggestionsMenu<T extends MenuItem>(props: Props<T>) {
               (pointerRef.current.clientX !== ev.clientX ||
                 pointerRef.current.clientY !== ev.clientY)
             ) {
+              hasNavigatedRef.current = true;
               setSelectedIndex(index);
             }
             pointerRef.current = {
@@ -1030,6 +1053,7 @@ function SuggestionsMenu<T extends MenuItem>(props: Props<T>) {
               !("disabled" in item && item.disabled) &&
               selectedIndex !== index
             ) {
+              hasNavigatedRef.current = true;
               setSelectedIndex(index);
             }
           };

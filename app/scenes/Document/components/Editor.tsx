@@ -295,6 +295,7 @@ function DocumentEditor(props: Props) {
           }
           extensions={extensions}
           editorStyle={editorStyle}
+          pluginSuggestions
           {...rest}
           canComment={commentingEnabled && can.comment}
         />

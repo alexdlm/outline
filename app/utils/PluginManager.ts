@@ -2,6 +2,8 @@ import { isArray, sortBy } from "es-toolkit/compat";
 import { action, makeObservable, observable, runInAction } from "mobx";
 import type { IObservableArray } from "mobx";
 import type { IssueRenderer } from "@shared/editor/types";
+import type { IntegrationService, MentionType } from "@shared/types";
+import type Integration from "~/models/Integration";
 import type Team from "~/models/Team";
 import type User from "~/models/User";
 import type { LazyComponent } from "~/components/LazyLoad";
@@ -17,6 +19,22 @@ export enum Hook {
   Imports = "imports",
   Icon = "icon",
   IssueRenderer = "issueRenderer",
+  MentionProvider = "mentionProvider",
+  SuggestionMenu = "suggestionMenu",
+}
+
+/** Props passed to a suggestion menu that a plugin registers with Hook.SuggestionMenu. */
+export interface PluginSuggestionMenuProps {
+  /** Whether the editor is displayed right-to-left. */
+  rtl: boolean;
+  /** The trigger that opened the menu, removed from the document when an item is chosen. */
+  trigger: string | string[];
+  /** Whether the menu is open. */
+  isActive: boolean;
+  /** The text typed after the trigger. */
+  search: string;
+  /** Closes the menu, inserting a new line when the key that closed it should. */
+  onClose: (insertNewLine?: boolean) => void;
 }
 
 /**
@@ -49,6 +67,36 @@ type PluginValueMap = {
   };
   [Hook.Icon]: React.ElementType;
   [Hook.IssueRenderer]: IssueRenderer;
+  [Hook.MentionProvider]: {
+    /** The integration service that this provider handles. */
+    service: IntegrationService;
+    /** Whether pasting a mentionable URL inserts a mention directly instead of offering a menu. */
+    pasteAsMention?: boolean;
+    /** Whether the URL belongs to the integration. */
+    isMentionable: (url: URL, integration: Integration) => boolean;
+    /** The mention type of the URL, or undefined if it cannot be mentioned. */
+    mentionType: (
+      url: URL,
+      integration: Integration
+    ) => MentionType | undefined;
+  };
+  [Hook.SuggestionMenu]: {
+    /** The character or characters that open the menu, all of the same length. */
+    trigger: string | string[];
+    /** Whether the search text may contain spaces. */
+    allowSpaces: boolean;
+    /** Whether the menu only opens once text follows the trigger. */
+    requireSearchTerm: boolean;
+    /** Whether the menu may open when the trigger is marked, defaults to true. */
+    enabledInMarks?: boolean;
+    /**
+     * Whether the menu may currently open. Checked on every keystroke that
+     * could open it, outside of MobX reactions.
+     */
+    isEnabled?: () => boolean;
+    /** The lazy loaded menu. */
+    component: LazyComponent<React.ComponentType<PluginSuggestionMenuProps>>;
+  };
 };
 
 export type Plugin<T extends Hook> = {

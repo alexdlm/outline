@@ -6,11 +6,13 @@ import { Slice } from "prosemirror-model";
 import type { EditorState } from "prosemirror-state";
 import { Plugin, PluginKey, TextSelection } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
+import type { Primitive } from "utility-types";
 import type { WidgetProps } from "@shared/editor/lib/Extension";
 import Extension from "@shared/editor/lib/Extension";
 import { codeLanguages } from "@shared/editor/lib/code";
 import isMarkdown from "@shared/editor/lib/isMarkdown";
 import normalizePastedMarkdown from "@shared/editor/lib/markdown/normalize";
+import { transformListToMentions } from "@shared/editor/lib/mention";
 import { isRemoteTransaction } from "@shared/editor/lib/multiplayer";
 import { recreateTransform } from "@shared/editor/lib/prosemirror-recreate-transform";
 import { isInCode } from "@shared/editor/queries/isInCode";
@@ -22,6 +24,7 @@ import parseCollectionSlug from "@shared/utils/parseCollectionSlug";
 import parseDocumentSlug from "@shared/utils/parseDocumentSlug";
 import { isCollectionUrl, isDocumentUrl, isUrl } from "@shared/utils/urls";
 import stores from "~/stores";
+import { getPasteMentionTypes } from "~/utils/mention";
 import { PasteMenu } from "../components/PasteMenu";
 
 export default class PasteHandler extends Extension {
@@ -223,7 +226,7 @@ export default class PasteHandler extends Extension {
                         this.insertLink(trimmedText);
                       });
                   }
-                } else {
+                } else if (!this.insertPastedMention(trimmedText)) {
                   this.insertLink(trimmedText);
                 }
 
@@ -407,6 +410,85 @@ export default class PasteHandler extends Extension {
     this.showPasteMenu(href);
   }
 
+  /**
+   * Inserts a pasted URL as a mention when an integration's mention provider
+   * asks for it, skipping the paste menu.
+   *
+   * @param href the pasted URL.
+   * @returns true if a mention was inserted.
+   */
+  private insertPastedMention(href: string): boolean {
+    const { view } = this.editor;
+    const { state } = view;
+    const { schema } = state;
+
+    if (!schema.nodes.mention) {
+      return false;
+    }
+
+    const inLink = !!schema.marks.link.isInSet(
+      state.storedMarks ?? state.selection.$from.marks()
+    );
+    if (inLink) {
+      return false;
+    }
+
+    const type = this.findPasteMentionTypes([href])?.[href];
+    if (!type) {
+      return false;
+    }
+
+    const mention = schema.nodes.mention.create({
+      id: uuidv4(),
+      type,
+      label: href,
+      href,
+      modelId: uuidv4(),
+      actorId: stores.auth.currentUserId ?? undefined,
+    });
+
+    view.dispatch(
+      state.tr
+        .replaceSelectionWith(mention, false)
+        .insertText(" ")
+        .scrollIntoView()
+        .setMeta("paste", true)
+        .setMeta("uiEvent", "paste")
+    );
+    return true;
+  }
+
+  /**
+   * Builds the attributes for converting a pasted list of URLs to mentions,
+   * only when every URL is pasted as a mention directly.
+   *
+   * @param links the URLs in the pasted list.
+   * @returns the attributes for transformListToMentions, or undefined.
+   */
+  private getPasteMentionListAttrs(
+    links: string[]
+  ): Record<string, Primitive> | undefined {
+    if (!this.editor.schema.nodes.mention) {
+      return undefined;
+    }
+
+    const types = this.findPasteMentionTypes(links);
+    if (!types) {
+      return undefined;
+    }
+
+    return { ...types, actorId: stores.auth.currentUserId ?? undefined };
+  }
+
+  private findPasteMentionTypes(hrefs: string[]) {
+    // Read the plain observable map because the store's computed getters warn
+    // when read outside of a reaction.
+    return getPasteMentionTypes(
+      hrefs,
+      Array.from(stores.integrations.data.values())
+    );
+  }
+
   private insertEmbed = () => {
     const { view } = this.editor;
     const { state } = view;
@@ -502,10 +584,18 @@ export default class PasteHandler extends Extension {
       return false;
     });
 
-    const showPasteMenu = allLinks && links.length;
+    const mentionAttrs =
+      allLinks && links.length && !this.shiftKey
+        ? this.getPasteMentionListAttrs(links)
+        : undefined;
+    const showPasteMenu = allLinks && links.length && !mentionAttrs;
 
-    // it's possible that the links can be converted to mentions
-    if (showPasteMenu) {
+    if (mentionAttrs) {
+      tr = state.tr.replaceSelectionWith(
+        transformListToMentions(listNode, schema, mentionAttrs)
+      );
+    } else if (showPasteMenu) {
+      // it's possible that the links can be converted to mentions
       const placeholderId = links[0];
       const to = from + listNode.nodeSize;
 

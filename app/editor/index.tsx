@@ -65,10 +65,12 @@ import Flex from "~/components/Flex";
 import { PortalContext } from "~/components/Portal";
 import type { Properties } from "~/types";
 import Logger from "~/utils/Logger";
+import { Hook, PluginManager } from "~/utils/PluginManager";
 import ComponentView from "./components/ComponentView";
 import EditorContext from "./components/EditorContext";
 import { NodeViewRenderer } from "./components/NodeViewRenderer";
 import type { PortalRenderer } from "./components/NodeViewRenderer";
+import { PluginSuggestionExtension } from "./extensions/PluginSuggestion";
 
 import WithTheme from "./components/WithTheme";
 import { isArray, isNull, map } from "es-toolkit/compat";
@@ -91,6 +93,8 @@ export type Props = {
   placeholder: string;
   /** Extensions to load into the editor */
   extensions?: (AnyExtensionClass | AnyExtension)[];
+  /** Whether suggestion menus registered by plugins are bound to the editor when it is editable. */
+  pluginSuggestions?: boolean;
   /** If the editor should be focused on mount */
   autoFocus?: boolean;
   /** The focused comment, if any */
@@ -440,7 +444,26 @@ export class Editor extends React.PureComponent<
   }
 
   private createExtensions() {
-    return new ExtensionManager(this.props.extensions, this);
+    return new ExtensionManager(
+      [...(this.props.extensions ?? []), ...this.createPluginSuggestions()],
+      this
+    );
+  }
+
+  /**
+   * Plugin suggestion menus are bound here, as the editor initializes, and
+   * never added to a live editor: reconfiguring the state would destroy
+   * plugin views such as the collaborative undo manager. A read-only editor
+   * that becomes editable runs init again and gets them then.
+   */
+  private createPluginSuggestions(): PluginSuggestionExtension[] {
+    if (!this.props.pluginSuggestions || this.props.readOnly) {
+      return [];
+    }
+
+    return PluginManager.getHooks(Hook.SuggestionMenu).map(
+      (hook) => new PluginSuggestionExtension(hook)
+    );
   }
 
   private createPlugins() {
