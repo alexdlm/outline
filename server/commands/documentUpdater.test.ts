@@ -149,6 +149,79 @@ describe("documentUpdater", () => {
     }
   );
 
+  it("should keep a narrowed mention written back in its earlier link form", async () => {
+    const user = await buildUser();
+    const href = "https://ruiner.codecks.io/card/16a-document-how-things-work";
+    const mention = {
+      id: randomUUID(),
+      modelId: randomUUID(),
+      label: "Document how things work.",
+      actorId: user.id,
+    };
+    const buildDoc = (attrs: Record<string, string>) =>
+      schema.nodes.doc.create(undefined, [
+        schema.nodes.paragraph.create(undefined, [
+          schema.nodes.mention.create({ ...mention, ...attrs }),
+        ]),
+      ]);
+
+    // An agent reads the document while the mention is still a link.
+    const staleText = await DocumentHelper.toMarkdown(
+      buildDoc({ type: MentionType.URL, href }).toJSON(),
+      { includeTitle: false }
+    );
+
+    // The editor then narrows it to an issue before the agent writes back.
+    let document = await buildDocument({
+      teamId: user.teamId,
+      content: buildDoc({ type: MentionType.Issue, href }).toJSON(),
+    });
+
+    document = await withAPIContext(user, (ctx) =>
+      documentUpdater(ctx, { document, text: staleText })
+    );
+
+    await document.reload();
+    expect(DocumentHelper.parseMentions(document)).toEqual([
+      expect.objectContaining({
+        id: mention.id,
+        type: MentionType.Issue,
+        href,
+      }),
+    ]);
+  });
+
+  it("should not restore attributes onto a mention that changed to another type", () => {
+    const actorId = randomUUID();
+    const id = randomUUID();
+    const modelId = randomUUID();
+    const buildDoc = (attrs: Record<string, string>) =>
+      schema.nodes.doc.create(undefined, [
+        schema.nodes.paragraph.create(undefined, [
+          schema.nodes.mention.create({
+            id,
+            modelId,
+            label: "Card",
+            actorId,
+            ...attrs,
+          }),
+        ]),
+      ]);
+
+    const result = ProsemirrorHelper.assignMentionActors(
+      buildDoc({ type: MentionType.User }),
+      actorId,
+      buildDoc({
+        type: MentionType.Issue,
+        href: "https://ruiner.codecks.io/card/16a-document-how-things-work",
+      })
+    );
+
+    expect(ProsemirrorHelper.parseMentions(result)[0]).toEqual(
+      expect.objectContaining({ type: MentionType.User, href: undefined })
+    );
+  });
+
   it("should not restore attributes onto a mention that now refers to another model", () => {
     const actorId = randomUUID();
     const id = randomUUID();

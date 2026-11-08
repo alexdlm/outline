@@ -95,6 +95,13 @@ export type MentionAttrs = {
   unfurl?: UnfurlResponse[keyof UnfurlResponse];
 };
 
+// The types the editor narrows a link mention to once its unfurl resolves.
+const NarrowedMentionTypes = [
+  MentionType.Issue,
+  MentionType.PullRequest,
+  MentionType.Project,
+];
+
 const pluginsWithSafeDecorations = new WeakSet<Plugin>();
 
 // jsdom does not implement ResizeObserver, and the exported document never
@@ -193,7 +200,8 @@ export class ProsemirrorHelper extends SharedProsemirrorHelper {
    * mentions retained from an earlier document, including Markdown round trips.
    * Retained mentions also keep the href and unfurl that the mention:// form of
    * Outline's internal Markdown cannot carry, so external mentions survive a
-   * document being rewritten through the API.
+   * document being rewritten through the API. A link mention written back
+   * after the editor narrowed it to the resource it points at keeps that type.
    *
    * @param doc the updated document.
    * @param actorId the authenticated writer's ID.
@@ -217,10 +225,15 @@ export class ProsemirrorHelper extends SharedProsemirrorHelper {
       }
 
       const previous = previousMentions.get(node.attrs.id);
+      const narrowed =
+        previous &&
+        node.attrs.type === MentionType.URL &&
+        NarrowedMentionTypes.includes(previous.type);
       const retained =
         previous &&
-        previous.type === node.attrs.type &&
+        (previous.type === node.attrs.type || narrowed) &&
         previous.modelId === node.attrs.modelId;
+      const type = retained ? previous.type : node.attrs.type;
       const mentionActorId = retained
         ? previous.actorId
         : (node.attrs.actorId ?? actorId);
@@ -232,12 +245,14 @@ export class ProsemirrorHelper extends SharedProsemirrorHelper {
         : node.attrs.unfurl;
 
       if (
+        type !== node.attrs.type ||
         mentionActorId !== node.attrs.actorId ||
         href !== node.attrs.href ||
         unfurl !== node.attrs.unfurl
       ) {
         transform.setNodeMarkup(pos, undefined, {
           ...node.attrs,
+          type,
           actorId: mentionActorId,
           href,
           unfurl,
