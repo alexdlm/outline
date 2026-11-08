@@ -17,6 +17,12 @@ export class CodecksLimiter {
   /** Requests allowed per window, across all processes. */
   public static readonly points = 30;
 
+  /**
+   * Searches allowed per window, a share of the points above so that people
+   * searching cannot use up the requests that load card mentions.
+   */
+  public static readonly searchPoints = 12;
+
   /** The window in seconds. */
   public static readonly duration = 5;
 
@@ -33,16 +39,17 @@ export class CodecksLimiter {
    * @returns false when the limit is reached and the request must not be sent.
    */
   public static async consume(): Promise<boolean> {
-    try {
-      await CodecksLimiter.rateLimiter.consume(CodecksLimiter.globalKey);
-      return true;
-    } catch (err) {
-      if (err instanceof RateLimiterRes) {
-        return false;
-      }
-      Logger.error("Codecks rate limiter error", toError(err));
-      return true;
-    }
+    return CodecksLimiter.consumeFrom(CodecksLimiter.rateLimiter);
+  }
+
+  /**
+   * Consumes a point for one search, which then also consumes a point for its
+   * request. A limiter store outage is logged and lets the search through.
+   *
+   * @returns false when searches are limited and this one must not be sent.
+   */
+  public static async consumeSearch(): Promise<boolean> {
+    return CodecksLimiter.consumeFrom(CodecksLimiter.searchRateLimiter);
   }
 
   /**
@@ -135,20 +142,57 @@ export class CodecksLimiter {
 
   private static limiter: RateLimiterRedis | undefined;
 
+  private static searchLimiter: RateLimiterRedis | undefined;
+
+  private static async consumeFrom(
+    limiter: RateLimiterRedis
+  ): Promise<boolean> {
+    try {
+      await limiter.consume(CodecksLimiter.globalKey);
+      return true;
+    } catch (err) {
+      if (err instanceof RateLimiterRes) {
+        return false;
+      }
+      Logger.error("Codecks rate limiter error", toError(err));
+      return true;
+    }
+  }
+
   // Created on first use because the Redis client connects when accessed.
   private static get rateLimiter(): RateLimiterRedis {
     if (!CodecksLimiter.limiter) {
-      CodecksLimiter.limiter = new RateLimiterRedis({
-        storeClient: Redis.defaultClient,
-        keyPrefix: "rl:codecks",
-        points: CodecksLimiter.points,
-        duration: CodecksLimiter.duration,
-        insuranceLimiter: new RateLimiterMemory({
-          points: CodecksLimiter.points,
-          duration: CodecksLimiter.duration,
-        }),
-      });
+      CodecksLimiter.limiter = CodecksLimiter.createLimiter(
+        "rl:codecks",
+        CodecksLimiter.points
+      );
     }
     return CodecksLimiter.limiter;
+  }
+
+  private static get searchRateLimiter(): RateLimiterRedis {
+    if (!CodecksLimiter.searchLimiter) {
+      CodecksLimiter.searchLimiter = CodecksLimiter.createLimiter(
+        "rl:codecks-search",
+        CodecksLimiter.searchPoints
+      );
+    }
+    return CodecksLimiter.searchLimiter;
+  }
+
+  private static createLimiter(
+    keyPrefix: string,
+    points: number
+  ): RateLimiterRedis {
+    return new RateLimiterRedis({
+      storeClient: Redis.defaultClient,
+      keyPrefix,
+      points,
+      duration: CodecksLimiter.duration,
+      insuranceLimiter: new RateLimiterMemory({
+        points,
+        duration: CodecksLimiter.duration,
+      }),
+    });
   }
 }

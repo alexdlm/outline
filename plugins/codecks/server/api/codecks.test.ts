@@ -35,6 +35,7 @@ import {
   CodecksErrorCode,
   type CodecksCard,
 } from "../codecks";
+import { CodecksLimiter } from "../limiter";
 import { presentCard } from "../presenters";
 
 const server = getTestServer();
@@ -691,6 +692,45 @@ describe("#codecks.search", () => {
     );
   });
 
+  it("should share cached results between people searching the same decks", async () => {
+    const { team, account, mapping } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    const other = await buildUser({ teamId: team.id });
+    const card = buildCard(mapping.projectId);
+    mockDecks({ [mapping.projectId]: ["deck-1"] });
+    const search = vi.spyOn(Codecks, "searchCards").mockResolvedValue([card]);
+
+    const first = await server.post("/api/codecks.search", user, {
+      body: { query: "Document" },
+    });
+    const second = await server.post("/api/codecks.search", other, {
+      body: { query: "document" },
+    });
+
+    expect(first.status).toEqual(200);
+    expect(second.status).toEqual(200);
+    expect((await second.json()).data).toEqual([
+      presentCard(card, account.subdomain),
+    ]);
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search.mock.calls[0][1].query).toEqual("document");
+  });
+
+  it("should not search Codecks when searches are limited", async () => {
+    const { team, mapping } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    mockDecks({ [mapping.projectId]: ["deck-1"] });
+    vi.spyOn(CodecksLimiter, "consumeSearch").mockResolvedValue(false);
+    const search = vi.spyOn(Codecks, "searchCards");
+
+    const res = await server.post("/api/codecks.search", user, {
+      body: { query: "document" },
+    });
+
+    expect(res.status).toEqual(400);
+    expect(search).not.toHaveBeenCalled();
+  });
+
   it("should only search projects of collections the user can read", async () => {
     const { team, admin, account, mapping, integration } =
       await buildConnectedTeam();
@@ -872,7 +912,7 @@ describe("#codecks.search", () => {
         [cardsKey({
           deckId: { op: "in", value: ["deck-1"] },
           visibility: "default",
-          title: { op: "contains", value: text },
+          title: { op: "contains", value: text.toLowerCase() },
           ...recent,
         })]: expect.any(Array),
       },

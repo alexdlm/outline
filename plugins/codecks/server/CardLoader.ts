@@ -27,8 +27,15 @@ export class CardLoader {
   /** How long a card, or the fact that it does not exist, is cached in seconds. */
   public static readonly cacheExpiry = Minute.seconds;
 
-  /** How long requests are collected before they are loaded together, in milliseconds. */
-  public static readonly batchDelay = 15;
+  /**
+   * How long a batch waits for another request before it is loaded, in
+   * milliseconds. The mentions of a document are requested together, but
+   * reach the loader spread out by the work done for each request.
+   */
+  public static readonly batchDelay = 25;
+
+  /** The longest a batch waits for more requests, in milliseconds. */
+  public static readonly maxBatchWait = 150;
 
   /** The most cards loaded in one request. */
   public static readonly maxBatchSize = 100;
@@ -91,16 +98,16 @@ export class CardLoader {
     const key = `${source.teamId}:${source.accountId}`;
     let batch = CardLoader.batches.get(key);
     if (!batch) {
-      batch = {
-        source,
-        waiters: new Map(),
-        timer: setTimeout(
-          () => void CardLoader.flush(key),
-          CardLoader.batchDelay
-        ),
-      };
+      batch = { source, waiters: new Map(), startedAt: Date.now() };
       CardLoader.batches.set(key, batch);
     }
+
+    clearTimeout(batch.timer);
+    const remaining = CardLoader.maxBatchWait - (Date.now() - batch.startedAt);
+    batch.timer = setTimeout(
+      () => void CardLoader.flush(key),
+      Math.max(0, Math.min(CardLoader.batchDelay, remaining))
+    );
 
     const { waiters } = batch;
     return new Promise<CardResult>((resolve) => {
@@ -147,5 +154,7 @@ export class CardLoader {
 interface Batch {
   source: CardSource;
   waiters: Map<number, Array<(card: CardResult) => void>>;
-  timer: ReturnType<typeof setTimeout>;
+  /** When the first request of the batch arrived, in milliseconds since the epoch. */
+  startedAt: number;
+  timer?: ReturnType<typeof setTimeout>;
 }

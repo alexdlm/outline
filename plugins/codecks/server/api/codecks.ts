@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import Router from "@koa/router";
 import type { Transaction } from "sequelize";
 import { IntegrationService, IntegrationType, UserRole } from "@shared/types";
@@ -30,13 +31,14 @@ import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import { RedisPrefixHelper } from "@server/utils/RedisPrefixHelper";
 import { readCodecksDisplay } from "../../shared/display";
 import type { CodecksMapping } from "../../shared/types";
-import { Codecks, CodecksError } from "../codecks";
+import { Codecks, CodecksError, CodecksErrorCode } from "../codecks";
 import type { CodecksCard, CodecksConnection } from "../codecks";
 import {
   allowedProjectIds,
   getCodecksAccount,
   getCodecksMappings,
 } from "../gate";
+import { CodecksLimiter } from "../limiter";
 import { presentCard, presentInfo } from "../presenters";
 import * as T from "./schema";
 
@@ -282,11 +284,7 @@ router.post(
     try {
       const deckIds = await findDeckIds(user.teamId, connection, projectIds);
       if (deckIds.length > 0) {
-        cards = await Codecks.searchCards(connection, {
-          deckIds,
-          query,
-          limit: SearchLimit,
-        });
+        cards = await searchCards(user.teamId, connection, deckIds, query);
       }
     } catch (err) {
       throw toRequestError(err);
@@ -428,6 +426,51 @@ interface ProjectDecks {
   id: string;
   deckIds: string[];
 }
+
+/**
+ * Searches the cards of decks. Results are cached briefly with the team's
+ * unfurls, keyed by the decks searched, so they are shared only by people who
+ * may search the same decks. Searches have their own share of the requests
+ * made to Codecks, so that they cannot stop card mentions from loading.
+ *
+ * @param teamId the team.
+ * @param connection the token and organization to query.
+ * @param deckIds the decks to search.
+ * @param query the query, empty for recently updated cards.
+ * @returns the cards found.
+ * @throws CodecksError if the search could not be made.
+ */
+async function searchCards(
+  teamId: string,
+  connection: CodecksConnection & { accountId: string },
+  deckIds: string[],
+  query: string
+): Promise<CodecksCard[]> {
+  // Codecks matches titles regardless of case, and short ids are lower case.
+  const normalized = query.trim().toLowerCase();
+  const scope = createHash("sha256")
+    .update([...new Set(deckIds)].sort().join(","))
+    .digest("hex");
+
+  const cards = await CacheHelper.getDataOrSet<CodecksCard[]>(
+    `${RedisPrefixHelper.getUnfurlPrefix(teamId)}codecks:${connection.accountId}:search:${scope}:${normalized}`,
+    async () => {
+      if (!(await CodecksLimiter.consumeSearch())) {
+        throw new CodecksError(CodecksErrorCode.RateLimited);
+      }
+      return Codecks.searchCards(connection, {
+        deckIds,
+        query: normalized,
+        limit: SearchLimit,
+      });
+    },
+    SearchCacheExpiry
+  );
+  return cards ?? [];
+}
+
+/** How long search results are cached, in seconds. */
+const SearchCacheExpiry = 30;
 
 /** How long the decks of an organization are cached, in seconds. */
 const DeckCacheExpiry = Minute.seconds;

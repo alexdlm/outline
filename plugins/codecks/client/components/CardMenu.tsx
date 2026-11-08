@@ -23,6 +23,7 @@ import {
 import { stringToColor } from "@shared/utils/color";
 import { errToString } from "@shared/utils/error";
 import parseDocumentSlug from "@shared/utils/parseDocumentSlug";
+import { UrlHelper } from "@shared/utils/UrlHelper";
 import { sanitizeImageSrc } from "@shared/utils/urls";
 import { Avatar, AvatarSize } from "~/components/Avatar";
 import { useEditor } from "~/editor/components/EditorContext";
@@ -37,8 +38,8 @@ import type { PluginSuggestionMenuProps } from "~/utils/PluginManager";
 import { CodecksUtils } from "../../shared/CodecksUtils";
 import type { CardSearchResults } from "../search";
 import {
-  isCurrentSearch,
-  isEnterNewLineQuery,
+  answerQuery,
+  findsNothing,
   shouldCloseCardMenu,
   toSearchQuery,
 } from "../search";
@@ -55,7 +56,9 @@ interface CardMenuItem extends MenuItem {
 /**
  * The menu opened by typing "$". It searches the Codecks cards that the user
  * may see, narrowed to the projects of the document's collection, and mentions
- * the chosen card. A bare "$" lists recently updated cards.
+ * the chosen card. A bare "$" lists recently updated cards. Earlier results
+ * narrow the list as the user types, and searches are only made for what they
+ * cannot answer.
  */
 export const CardMenu = observer(function CardMenu_({
   rtl,
@@ -68,64 +71,89 @@ export const CardMenu = observer(function CardMenu_({
   const { auth, unfurls } = useStores();
   const editor = useEditor();
   const actorId = auth.currentUserId;
+  // The id at the end of the slug, which unlike the slug stays the same when
+  // the document is renamed.
   const documentId = useLocationSelector(
-    (location) => parseDocumentSlug(location.pathname) || undefined
+    (location) =>
+      parseDocumentSlug(location.pathname)?.match(
+        UrlHelper.SLUG_URL_REGEX
+      )?.[1] || undefined
   );
   const query = toSearchQuery(search);
-  const [results, setResults] = useState<CardSearchResults<IssueUnfurl>>();
+  const [results, setResults] = useState(() => resultCache.list());
+  const [revealed, setRevealed] = useState(false);
   const [wasActive, setWasActive] = useState(isActive);
-  const latestRequestRef = useRef(0);
 
-  // The menu always opens on a bare trigger, so only recent cards for the same
-  // document are worth showing again while they refresh.
+  // Other menus may have searched since this one was last open.
   if (isActive !== wasActive) {
     setWasActive(isActive);
-    if (
-      isActive &&
-      results &&
-      !(isCurrentSearch(results, "", documentId) && results.cards.length > 0)
-    ) {
-      setResults(undefined);
+    setRevealed(false);
+    if (isActive) {
+      setResults(resultCache.list());
     }
   }
 
-  const closing = shouldCloseCardMenu(search, results, documentId);
-  const enterCloses =
-    !isCurrentSearch(results, query, documentId) || results.cards.length === 0;
+  const answer = useMemo(
+    () => answerQuery(results, query, documentId, Date.now()),
+    [results, query, documentId]
+  );
+  const searching = !answer.complete && !answer.failed;
+  const closing = shouldCloseCardMenu(search, answer);
+
+  // A menu with nothing to show yet waits briefly before showing that it is
+  // searching, so that a quick answer does not flash a loading state.
+  useEffect(() => {
+    if (!isActive || revealed) {
+      return;
+    }
+    const timeout = setTimeout(() => setRevealed(true), RevealDelay);
+    return () => clearTimeout(timeout);
+  }, [isActive, revealed]);
 
   useEffect(() => {
-    if (!isActive) {
+    if (!isActive || !searching) {
       return;
     }
 
-    const request = ++latestRequestRef.current;
     const timeout = setTimeout(
-      () =>
+      () => {
+        if (!resultCache.start(query, documentId)) {
+          return;
+        }
+
         void searchCards(query, documentId).then((cards) => {
-          if (request !== latestRequestRef.current) {
-            return;
-          }
+          const receivedAt = Date.now();
+          resultCache.finish({
+            query,
+            documentId,
+            cards: cards ?? [],
+            failed: !cards,
+            receivedAt,
+          });
 
           // The chosen card's mention then renders from the store at once,
           // instead of fetching its unfurl again.
-          const fetchedAt = new Date().toISOString();
-          runInAction(() => {
-            for (const card of cards) {
-              unfurls.add({
-                id: card.url,
-                type: UnfurlResourceType.Issue,
-                fetchedAt,
-                data: card,
-              });
-            }
-          });
-          setResults({ query, documentId, cards });
-        }),
+          if (cards) {
+            const fetchedAt = new Date(receivedAt).toISOString();
+            runInAction(() => {
+              for (const card of cards) {
+                unfurls.add({
+                  id: card.url,
+                  type: UnfurlResourceType.Issue,
+                  fetchedAt,
+                  data: card,
+                });
+              }
+            });
+          }
+          setResults(resultCache.list());
+        });
+      },
       query ? SearchDelay : 0
     );
 
     return () => clearTimeout(timeout);
-  }, [isActive, query, documentId, unfurls]);
+  }, [isActive, searching, query, documentId, unfurls]);
 
   useEffect(() => {
     if (isActive && closing) {
@@ -133,22 +161,27 @@ export const CardMenu = observer(function CardMenu_({
     }
   }, [isActive, closing, onClose]);
 
-  // Until the current query has results, Enter must not choose a card listed
-  // for an earlier one, so it closes the menu and starts a new line instead.
-  // The editor would otherwise swallow it while the menu is open.
+  const hidden =
+    closing ||
+    findsNothing(query) ||
+    (answer.cards.length === 0 && searching && !revealed);
+
+  // While no card is listed, Enter closes the menu and starts a new line, and
+  // Escape closes a menu that is not shown. The editor would otherwise swallow
+  // them while the menu is open.
   const keyStateRef = useRef({
     editor,
     isActive,
-    loaded: !!results,
-    enterCloses,
+    hidden,
+    enterCloses: answer.cards.length === 0,
     onClose,
   });
   useLayoutEffect(() => {
     keyStateRef.current = {
       editor,
       isActive,
-      loaded: !!results,
-      enterCloses,
+      hidden,
+      enterCloses: answer.cards.length === 0,
       onClose,
     };
   });
@@ -177,7 +210,7 @@ export const CardMenu = observer(function CardMenu_({
         event.preventDefault();
         event.stopImmediatePropagation();
         state.onClose(true);
-      } else if (event.key === "Escape" && !state.loaded) {
+      } else if (event.key === "Escape" && state.hidden) {
         event.preventDefault();
         state.onClose();
       }
@@ -188,22 +221,20 @@ export const CardMenu = observer(function CardMenu_({
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, []);
 
+  const status = answer.failed
+    ? t("Codecks could not be searched, try again shortly.")
+    : searching
+      ? t("Searching…")
+      : answer.cards.length === 0
+        ? t("No cards match your search.")
+        : undefined;
+
   const items = useMemo((): CardMenuItem[] => {
-    if (!results || !actorId) {
+    if (!actorId) {
       return [];
     }
 
-    if (results.cards.length === 0) {
-      return [
-        {
-          name: "noop",
-          title: t("No cards match your search."),
-          disabled: true,
-        },
-      ];
-    }
-
-    return results.cards.map((card) => ({
+    const cardItems = answer.cards.map((card): CardMenuItem => ({
       name: "mention",
       title: card.title || card.id,
       icon: (
@@ -215,8 +246,8 @@ export const CardMenu = observer(function CardMenu_({
       appendSpace: true,
       card,
       // Built when the item is chosen, so a mention picked from results that
-      // are shown again does not reuse the ids of an earlier one. The label is
-      // the URL, as nothing about a card is stored in the document.
+      // are shown again does not reuse the ids of an earlier one. The label
+      // is the URL, as nothing about a card is stored in the document.
       attrs: () => ({
         id: uuidv4(),
         type: MentionType.URL,
@@ -226,7 +257,11 @@ export const CardMenu = observer(function CardMenu_({
         actorId,
       }),
     }));
-  }, [results, actorId, t]);
+
+    return status
+      ? [...cardItems, { name: "noop", title: status, disabled: true }]
+      : cardItems;
+  }, [answer.cards, status, actorId]);
 
   const renderMenuItem = useCallback<
     SuggestionsMenuProps<CardMenuItem>["renderMenuItem"]
@@ -244,14 +279,7 @@ export const CardMenu = observer(function CardMenu_({
     );
   }, []);
 
-  // Nothing is shown until the first results, as the menu could not be placed
-  // correctly without knowing its height. An amount such as "$5" that matches
-  // no card is ordinary text, so it gets no empty menu either.
-  if (
-    !results ||
-    closing ||
-    (results.cards.length === 0 && /^\d/.test(query))
-  ) {
+  if (hidden) {
     return null;
   }
 
@@ -263,7 +291,6 @@ export const CardMenu = observer(function CardMenu_({
       search={search}
       onClose={onClose}
       filterable={false}
-      enterClosesWhenUntouched={isEnterNewLineQuery(query)}
       width={MenuWidth}
       items={items}
       renderMenuItem={renderMenuItem}
@@ -348,12 +375,12 @@ function CardLabel({ card, selected }: CardLabelProps) {
  *
  * @param query the query, empty for recently updated cards.
  * @param documentId the document being edited, which narrows the search.
- * @returns the cards found, or none if the search failed.
+ * @returns the cards found, or undefined if the search failed.
  */
 async function searchCards(
   query: string,
   documentId: string | undefined
-): Promise<IssueUnfurl[]> {
+): Promise<IssueUnfurl[] | undefined> {
   try {
     const res = await client.post<{ data: IssueUnfurl[] }>("/codecks.search", {
       query,
@@ -364,12 +391,80 @@ async function searchCards(
     Logger.warn("Failed to search Codecks cards", {
       message: errToString(err),
     });
-    return [];
+    return undefined;
   }
 }
 
+/**
+ * Results of earlier searches, shared by every card menu so that reopening the
+ * menu or typing a query again does not search again while they are fresh.
+ */
+class ResultCache {
+  /**
+   * The results kept, newest last.
+   *
+   * @returns the results.
+   */
+  public list(): CardSearchResults<IssueUnfurl>[] {
+    return [...this.results.values()];
+  }
+
+  /**
+   * Marks a search as started, unless the same one already is.
+   *
+   * @param query the query.
+   * @param documentId the document that narrows the search, if any.
+   * @returns true if the search should be made.
+   */
+  public start(query: string, documentId: string | undefined): boolean {
+    const key = ResultCache.key(query, documentId);
+    if (this.pending.has(key)) {
+      return false;
+    }
+    this.pending.add(key);
+    return true;
+  }
+
+  /**
+   * Keeps the results of a finished search, dropping the oldest results once
+   * too many are kept.
+   *
+   * @param results the results.
+   */
+  public finish(results: CardSearchResults<IssueUnfurl>): void {
+    const key = ResultCache.key(results.query, results.documentId);
+    this.pending.delete(key);
+    this.results.delete(key);
+    this.results.set(key, results);
+
+    while (this.results.size > MaxCachedResults) {
+      const oldest = this.results.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.results.delete(oldest);
+    }
+  }
+
+  private results = new Map<string, CardSearchResults<IssueUnfurl>>();
+
+  private pending = new Set<string>();
+
+  private static key(query: string, documentId: string | undefined) {
+    return `${documentId ?? ""}\n${query}`;
+  }
+}
+
+const resultCache = new ResultCache();
+
+/** The most results kept for reuse. */
+const MaxCachedResults = 50;
+
+/** How long a menu with nothing to show waits to show it is searching, in milliseconds. */
+const RevealDelay = 150;
+
 /** How long typing must pause before searching, in milliseconds. */
-const SearchDelay = 150;
+const SearchDelay = 250;
 
 /** The width of the menu in pixels, wider than other menus to fit card titles. */
 const MenuWidth = 400;

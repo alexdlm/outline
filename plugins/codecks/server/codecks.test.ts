@@ -516,6 +516,26 @@ describe("CardLoader", () => {
     expect(results).toEqual([first, second, null]);
   });
 
+  it("should keep collecting requests that arrive spread out", async () => {
+    const teamId = randomUUID();
+    const accountId = randomUUID();
+    const load = vi.fn((accountSeqs: number[]) =>
+      Promise.resolve(
+        accountSeqs.map((accountSeq) => buildCard({ accountSeq }))
+      )
+    );
+
+    const pending = [];
+    for (const accountSeq of [1, 2, 3]) {
+      pending.push(CardLoader.load({ teamId, accountId, load }, accountSeq));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await Promise.all(pending);
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect([...load.mock.calls[0][0]].sort((a, b) => a - b)).toEqual([1, 2, 3]);
+  });
+
   it("should not cache cards that could not be loaded", async () => {
     const teamId = randomUUID();
     const accountId = randomUUID();
