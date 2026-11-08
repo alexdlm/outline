@@ -1,15 +1,18 @@
+import { omit } from "es-toolkit";
 import { m } from "framer-motion";
 import { observer } from "mobx-react";
 import * as React from "react";
 import styled from "styled-components";
+import type { IssueRenderer } from "@shared/editor/types";
 import { depths } from "@shared/styles";
-import { UnfurlResourceType } from "@shared/types";
+import { UnfurlResourceType, type UnfurlResponse } from "@shared/types";
 import { Portal } from "~/components/Portal";
 import useEventListener from "~/hooks/useEventListener";
 import useKeyDown from "~/hooks/useKeyDown";
 import useMobile from "~/hooks/useMobile";
 import useOnClickOutside from "~/hooks/useOnClickOutside";
 import useStores from "~/hooks/useStores";
+import Logger from "~/utils/Logger";
 import LoadingIndicator from "../LoadingIndicator";
 import { CARD_MARGIN } from "./Components";
 import HoverPreviewDocument from "./HoverPreviewDocument";
@@ -48,13 +51,23 @@ const HoverPreviewDesktop = observer(
       undefined
     );
     const cardRef = React.useRef<HTMLDivElement | null>(null);
+    const [card, setCard] = React.useState<HTMLDivElement | null>(null);
+
+    // A plugin's card can mount after the preview opens, once its code has
+    // loaded, so the element is kept in state to position it when it appears.
+    const handleCardRef = React.useCallback((node: HTMLDivElement | null) => {
+      cardRef.current = node;
+      setCard(node);
+    }, []);
     const { cardLeft, cardTop, pointerLeft, pointerTop, pointerDir } =
       useHoverPosition({
         cardRef,
+        cardElement: card,
         element,
         isVisible,
       });
     const data = unfurlId ? unfurls.get(unfurlId)?.data : undefined;
+    const renderer = unfurls.getIssueRenderer(unfurlId ?? undefined);
 
     const closePreview = React.useCallback(() => {
       setVisible(false);
@@ -88,24 +101,26 @@ const HoverPreviewDesktop = observer(
 
     // Ensure that the preview stays open while the user is hovering over the card.
     React.useEffect(() => {
-      const card = cardRef.current;
-
-      if (isVisible) {
-        if (card) {
-          card.addEventListener("mouseenter", stopCloseTimer);
-          card.addEventListener("mouseleave", startCloseTimer);
-        }
+      if (!isVisible || !card) {
+        return;
       }
 
-      return () => {
-        if (card) {
-          card.removeEventListener("mouseenter", stopCloseTimer);
-          card.removeEventListener("mouseleave", startCloseTimer);
-        }
+      card.addEventListener("mouseenter", stopCloseTimer);
+      card.addEventListener("mouseleave", startCloseTimer);
 
-        stopCloseTimer();
+      return () => {
+        card.removeEventListener("mouseenter", stopCloseTimer);
+        card.removeEventListener("mouseleave", startCloseTimer);
       };
-    }, [element, startCloseTimer, isVisible, stopCloseTimer]);
+    }, [card, isVisible, startCloseTimer, stopCloseTimer]);
+
+    // A pending close is dropped when the hovered element changes, and the
+    // effect that opens the preview starts a new one when needed. This is
+    // separate from the listeners so that a card mounting late keeps it.
+    React.useEffect(
+      () => stopCloseTimer,
+      [element, startCloseTimer, isVisible, stopCloseTimer]
+    );
 
     if (dataLoading) {
       return <LoadingIndicator />;
@@ -148,7 +163,7 @@ const HoverPreviewDesktop = observer(
             >
               {data.type === UnfurlResourceType.Mention ? (
                 <HoverPreviewMention
-                  ref={cardRef}
+                  ref={handleCardRef}
                   name={data.name}
                   avatarUrl={data.avatarUrl}
                   color={data.color}
@@ -157,7 +172,7 @@ const HoverPreviewDesktop = observer(
                 />
               ) : data.type === UnfurlResourceType.Group ? (
                 <HoverPreviewGroup
-                  ref={cardRef}
+                  ref={handleCardRef}
                   name={data.name}
                   description={data.description}
                   memberCount={data.memberCount}
@@ -165,7 +180,7 @@ const HoverPreviewDesktop = observer(
                 />
               ) : data.type === UnfurlResourceType.Document ? (
                 <HoverPreviewDocument
-                  ref={cardRef}
+                  ref={handleCardRef}
                   url={data.url}
                   id={data.id}
                   title={data.title}
@@ -173,20 +188,28 @@ const HoverPreviewDesktop = observer(
                   lastActivityByViewer={data.lastActivityByViewer}
                 />
               ) : data.type === UnfurlResourceType.Issue ? (
-                <HoverPreviewIssue
-                  ref={cardRef}
-                  url={data.url}
-                  id={data.id}
-                  title={data.title}
-                  description={data.description}
-                  author={data.author}
-                  labels={data.labels}
-                  state={data.state}
-                  createdAt={data.createdAt}
-                />
+                renderer ? (
+                  <PluginIssueHoverPreview
+                    ref={handleCardRef}
+                    renderer={renderer}
+                    data={data}
+                  />
+                ) : (
+                  <HoverPreviewIssue
+                    ref={handleCardRef}
+                    url={data.url}
+                    id={data.id}
+                    title={data.title}
+                    description={data.description}
+                    author={data.author}
+                    labels={data.labels}
+                    state={data.state}
+                    createdAt={data.createdAt}
+                  />
+                )
               ) : data.type === UnfurlResourceType.PR ? (
                 <HoverPreviewPullRequest
-                  ref={cardRef}
+                  ref={handleCardRef}
                   url={data.url}
                   id={data.id}
                   title={data.title}
@@ -197,7 +220,7 @@ const HoverPreviewDesktop = observer(
                 />
               ) : data.type === UnfurlResourceType.Project ? (
                 <HoverPreviewProject
-                  ref={cardRef}
+                  ref={handleCardRef}
                   url={data.url}
                   name={data.name}
                   color={data.color}
@@ -209,18 +232,20 @@ const HoverPreviewDesktop = observer(
                 />
               ) : (
                 <HoverPreviewLink
-                  ref={cardRef}
+                  ref={handleCardRef}
                   url={data.url}
                   thumbnailUrl={data.thumbnailUrl}
                   title={data.title}
                   description={data.description}
                 />
               )}
-              <Pointer
-                top={pointerTop}
-                left={pointerLeft}
-                direction={pointerDir}
-              />
+              {card ? (
+                <Pointer
+                  top={pointerTop}
+                  left={pointerLeft}
+                  direction={pointerDir}
+                />
+              ) : null}
             </Animate>
           ) : null}
         </Position>
@@ -245,12 +270,82 @@ function HoverPreview({ element, unfurlId, dataLoading, ...rest }: Props) {
   );
 }
 
+interface PluginIssueHoverPreviewProps {
+  /** The plugin renderer that matched the issue's URL. */
+  renderer: IssueRenderer;
+  /** The issue unfurl to show. */
+  data: UnfurlResponse[UnfurlResourceType.Issue];
+  /** Attached to the card so that it can be positioned. */
+  ref: React.Ref<HTMLDivElement>;
+}
+
+/**
+ * Renders an issue hover card with a plugin's component, falling back to the
+ * default card if the component fails to load or render.
+ */
+function PluginIssueHoverPreview({
+  renderer,
+  data,
+  ref,
+}: PluginIssueHoverPreviewProps) {
+  const issue = omit(data, ["type"]);
+
+  return (
+    <PluginBoundary
+      key={data.url}
+      url={data.url}
+      fallback={<HoverPreviewIssue ref={ref} {...issue} />}
+    >
+      <React.Suspense fallback={null}>
+        <renderer.HoverPreview.Component ref={ref} {...issue} />
+      </React.Suspense>
+    </PluginBoundary>
+  );
+}
+
+interface PluginBoundaryProps {
+  /** The URL of the issue, logged with the error. */
+  url: string;
+  /** Rendered in place of the children once they have thrown. */
+  fallback: React.ReactNode;
+  children: React.ReactNode;
+}
+
+interface PluginBoundaryState {
+  hasError: boolean;
+}
+
+/** Contains errors from a plugin component, such as a chunk that failed to load. */
+class PluginBoundary extends React.Component<
+  PluginBoundaryProps,
+  PluginBoundaryState
+> {
+  public static getDerivedStateFromError(): PluginBoundaryState {
+    return { hasError: true };
+  }
+
+  public state: PluginBoundaryState = { hasError: false };
+
+  public componentDidCatch(error: Error) {
+    Logger.error("Failed to render plugin hover preview", error, {
+      url: this.props.url,
+    });
+  }
+
+  public render() {
+    return this.state.hasError ? this.props.fallback : this.props.children;
+  }
+}
+
 function useHoverPosition({
   cardRef,
+  cardElement,
   element,
   isVisible,
 }: {
   cardRef: React.RefObject<HTMLDivElement | null>;
+  /** The mounted card, so that the card is measured again when it changes. */
+  cardElement: HTMLDivElement | null;
   element: HTMLElement | null;
   isVisible: boolean;
 }) {
@@ -297,7 +392,7 @@ function useHoverPosition({
       setCardLeft(cLeft);
       setPointerLeft(pLeft);
     }
-  }, [isVisible, cardRef, element]);
+  }, [isVisible, cardRef, cardElement, element]);
 
   return { cardLeft, cardTop, pointerLeft, pointerTop, pointerDir };
 }

@@ -203,11 +203,12 @@ class Logger {
     }
 
     const sensitiveFields = [
-      "accessToken",
-      "refreshToken",
+      "accesstoken",
+      "refreshtoken",
       "token",
       "password",
       "content",
+      "authorization",
     ];
 
     if (level > 3) {
@@ -225,7 +226,7 @@ class Logger {
       const output: Record<string, any> = { ...input };
 
       for (const key of Object.keys(output)) {
-        if (sensitiveFields.includes(key)) {
+        if (sensitiveFields.includes(key.toLowerCase())) {
           output[key] = "[Filtered]";
         } else if (isObject(output[key])) {
           output[key] = this.sanitize(output[key], level + 1);

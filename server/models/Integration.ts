@@ -18,6 +18,7 @@ import IntegrationAuthentication from "@server/models/IntegrationAuthentication"
 import Team from "@server/models/Team";
 import User from "@server/models/User";
 import ParanoidModel from "@server/models/base/ParanoidModel";
+import { Hook, PluginManager } from "@server/utils/PluginManager";
 
 @Scopes(() => ({
   withAuthentication: {
@@ -124,6 +125,7 @@ class Integration<T = unknown> extends ParanoidModel<
           gitlab: settings?.gitlab,
           linear: settings?.linear,
           diagrams: settings?.diagrams,
+          ...this.presentPluginSettings(viewer),
         };
       }
       case IntegrationType.Analytics: {
@@ -152,6 +154,24 @@ class Integration<T = unknown> extends ParanoidModel<
       default:
         return undefined;
     }
+  }
+
+  /**
+   * Picks the settings keys that plugins registered for this service.
+   *
+   * @param viewer the user the settings are presented to, if any.
+   * @returns the registered settings, keyed by name.
+   */
+  private presentPluginSettings(viewer?: User) {
+    const settings = this.settings as Record<string, unknown> | null;
+    const keys = PluginManager.getHooks(Hook.IntegrationSettings)
+      .filter(
+        (hook) =>
+          hook.value.service === this.service &&
+          (!viewer?.isGuest || hook.value.visibleToGuests)
+      )
+      .flatMap((hook) => hook.value.keys);
+    return Object.fromEntries(keys.map((key) => [key, settings?.[key]]));
   }
 
   // hooks

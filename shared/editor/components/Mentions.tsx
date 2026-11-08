@@ -32,8 +32,13 @@ import {
   type JSONValue,
   type UnfurlResponse,
 } from "../../types";
+import { toPersistedUnfurl } from "../lib/mention";
 import { cn } from "../styles/utils";
-import type { ComponentProps } from "../types";
+import type {
+  ComponentProps,
+  IssueMentionProps,
+  IssueRenderer,
+} from "../types";
 import lazyWithRetry from "../../utils/lazyWithRetry";
 import { sharedModelPath } from "../../utils/routeHelpers";
 import { toDisplayUrl, cdnPath, sanitizeImageSrc } from "../../utils/urls";
@@ -199,18 +204,14 @@ export const MentionCollection = observer(function MentionCollection_(
 });
 
 type IssuePrProps = ComponentProps & {
-  onChangeUnfurl: (
-    unfurl:
-      | UnfurlResponse[UnfurlResourceType.Issue]
-      | UnfurlResponse[UnfurlResourceType.PR]
-  ) => void;
+  onChangeUnfurl: (unfurl: UnfurlResponse[keyof UnfurlResponse]) => void;
 };
 
 type IssueUrlProps = ComponentProps & {
-  onChangeUnfurl: (unfurl: UnfurlResponse[UnfurlResourceType.URL]) => void;
+  onChangeUnfurl: (unfurl: UnfurlResponse[keyof UnfurlResponse]) => void;
 };
 
-export const MentionURL = (props: IssueUrlProps) => {
+export const MentionURL = observer((props: IssueUrlProps) => {
   const { unfurls } = useStores();
   const [loaded, setLoaded] = React.useState(false);
   const onChangeUnfurl = React.useRef(props.onChangeUnfurl).current; // stable reference to callback function.
@@ -223,6 +224,7 @@ export const MentionURL = (props: IssueUrlProps) => {
   } = getAttributesFromNode(node);
 
   const url = typeof attrs.href === "string" ? attrs.href : undefined;
+  const renderer: IssueRenderer | undefined = unfurls.getIssueRenderer(url);
   const unfurl = url ? (unfurls.get(url)?.data ?? unfurlAttr) : undefined;
 
   React.useEffect(() => {
@@ -245,9 +247,13 @@ export const MentionURL = (props: IssueUrlProps) => {
 
         // We got a result back from the server, so update the unfurl in the node attributes.
         if (unfurlModel) {
-          onChangeUnfurl(
-            unfurlModel.data satisfies UnfurlResponse[UnfurlResourceType.URL]
-          );
+          onChangeUnfurl(toPersistedUnfurl(unfurlModel.data, renderer));
+          return;
+        }
+
+        // A plugin renders its links without an unfurl. A placeholder would be
+        // cached under the URL and shown as a generic link on hover.
+        if (renderer) {
           return;
         }
 
@@ -277,7 +283,27 @@ export const MentionURL = (props: IssueUrlProps) => {
     return () => {
       cancelled = true;
     };
-  }, [unfurls, url, node, onChangeUnfurl]);
+  }, [unfurls, url, node, onChangeUnfurl, renderer]);
+
+  if (renderer && url) {
+    const live: UnfurlResponse[keyof UnfurlResponse] | undefined =
+      unfurls.get(url)?.data;
+
+    return (
+      <PluginIssueMention
+        renderer={renderer}
+        attrs={attrs}
+        className={cn(className, {
+          "ProseMirror-selectednode": isSelected,
+        })}
+        href={url}
+        label={node.attrs.label}
+        unfurl={live?.type === UnfurlResourceType.Issue ? live : undefined}
+        storedUnfurl={unfurlAttr}
+        loaded={loaded}
+      />
+    );
+  }
 
   if (!unfurl) {
     return !loaded ? (
@@ -307,7 +333,7 @@ export const MentionURL = (props: IssueUrlProps) => {
       </Flex>
     </a>
   );
-};
+});
 
 export const MentionIssue = observer((props: IssuePrProps) => {
   const { unfurls } = useStores();
@@ -321,6 +347,8 @@ export const MentionIssue = observer((props: IssuePrProps) => {
     ...attrs
   } = getAttributesFromNode(node);
 
+  const href = typeof attrs.href === "string" ? attrs.href : undefined;
+  const renderer: IssueRenderer | undefined = unfurls.getIssueRenderer(href);
   const unfurl = unfurls.get(attrs.href)?.data ?? unfurlAttr;
 
   React.useEffect(() => {
@@ -336,10 +364,7 @@ export const MentionIssue = observer((props: IssuePrProps) => {
       }
 
       if (unfurlModel) {
-        onChangeUnfurl({
-          ...unfurlModel.data,
-          description: null,
-        } satisfies UnfurlResponse[UnfurlResourceType.Issue]);
+        onChangeUnfurl(toPersistedUnfurl(unfurlModel.data, renderer));
       }
 
       setLoaded(true);
@@ -350,7 +375,27 @@ export const MentionIssue = observer((props: IssuePrProps) => {
     return () => {
       cancelled = true;
     };
-  }, [unfurls, attrs.href, onChangeUnfurl]);
+  }, [unfurls, attrs.href, onChangeUnfurl, renderer]);
+
+  if (renderer && href) {
+    const live: UnfurlResponse[keyof UnfurlResponse] | undefined =
+      unfurls.get(href)?.data;
+
+    return (
+      <PluginIssueMention
+        renderer={renderer}
+        attrs={attrs}
+        className={cn(className, {
+          "ProseMirror-selectednode": isSelected,
+        })}
+        href={href}
+        label={node.attrs.label}
+        unfurl={live?.type === UnfurlResourceType.Issue ? live : undefined}
+        storedUnfurl={unfurlAttr}
+        loaded={loaded}
+      />
+    );
+  }
 
   if (!unfurl) {
     return !loaded ? (
@@ -615,6 +660,81 @@ export const MentionDate = observer(function MentionDate_(props: DateProps) {
     </React.Suspense>
   );
 });
+
+interface PluginIssueMentionProps extends IssueMentionProps {
+  /** The plugin renderer that matched the mention's URL. */
+  renderer: IssueRenderer;
+}
+
+/**
+ * Renders an issue mention with a plugin's component. While the component
+ * loads a spinner is shown, and if it fails the mention falls back to a link.
+ */
+const PluginIssueMention = ({
+  renderer,
+  ...props
+}: PluginIssueMentionProps) => (
+  <RendererBoundary
+    key={props.href}
+    href={props.href}
+    fallback={
+      <a
+        {...props.attrs}
+        className={props.className}
+        href={props.href}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+      >
+        {props.label}
+      </a>
+    }
+  >
+    <React.Suspense fallback={<MentionLoading className={props.className} />}>
+      <renderer.Mention.Component {...props} />
+    </React.Suspense>
+  </RendererBoundary>
+);
+
+interface RendererBoundaryProps {
+  /** The URL of the mention, logged with the error. */
+  href: string;
+  /** Rendered in place of the children once they have thrown. */
+  fallback: React.ReactNode;
+  children: React.ReactNode;
+}
+
+interface RendererBoundaryState {
+  hasError: boolean;
+}
+
+/**
+ * Contains errors from a plugin renderer, including a chunk that failed to
+ * load, so that they do not reach the editor.
+ */
+class RendererBoundary extends React.Component<
+  RendererBoundaryProps,
+  RendererBoundaryState
+> {
+  public static getDerivedStateFromError(): RendererBoundaryState {
+    return { hasError: true };
+  }
+
+  public state: RendererBoundaryState = { hasError: false };
+
+  public componentDidCatch(error: Error) {
+    // React logs the error without the mention it came from. Shared code
+    // cannot use the app's logger.
+    // oxlint-disable-next-line no-console
+    console.error("Failed to render plugin issue mention", {
+      href: this.props.href,
+      error,
+    });
+  }
+
+  public render() {
+    return this.state.hasError ? this.props.fallback : this.props.children;
+  }
+}
 
 const MentionLoading = ({ className }: { className: string }) => {
   const { t } = useTranslation();

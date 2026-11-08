@@ -5,6 +5,12 @@ import type { Decoration, EditorView } from "prosemirror-view";
 import * as React from "react";
 import type { DefaultTheme } from "styled-components";
 import type { Primitive } from "utility-types";
+import type {
+  JSONValue,
+  UnfurlResourceType,
+  UnfurlResponse,
+} from "../../types";
+import type { LazyComponent } from "../../utils/lazyWithRetry";
 
 export type NodeWithPos = {
   pos: number;
@@ -199,4 +205,59 @@ export interface SelectionToolbarMenuDescriptor {
    * @returns an array of menu items.
    */
   getItems: (ctx: SelectionContext) => MenuItem[];
+}
+
+/** A component loaded on demand, matching what the app's createLazyComponent returns. */
+export interface LazyRenderer<P> {
+  /** The lazy component, it suspends until its module has loaded. */
+  Component: LazyComponent<React.ComponentType<P>>;
+  /** Loads the component's module ahead of the first render. */
+  preload: () => Promise<unknown>;
+}
+
+/** Props passed to a plugin component that renders an issue mention. */
+export interface IssueMentionProps {
+  /** Attributes from the node's DOM spec, to spread onto the root link. The href is sanitized. */
+  attrs: Record<string, JSONValue>;
+  /** Class names for the root element, including the selection state. */
+  className: string;
+  /** The URL the mention points at. */
+  href: string;
+  /** The label stored on the node, available before any unfurl. */
+  label: string;
+  /** This viewer's live unfurl, undefined until loaded or when the viewer may not see it. */
+  unfurl?: UnfurlResponse[UnfurlResourceType.Issue];
+  /** The unfurl stored on the node, shared by every viewer and possibly in an older shape. */
+  storedUnfurl?: UnfurlResponse[keyof UnfurlResponse];
+  /** Whether this viewer's unfurl request has completed. */
+  loaded: boolean;
+}
+
+/** Props passed to a plugin component that renders an issue hover card. */
+export type IssueHoverPreviewProps = Omit<
+  UnfurlResponse[UnfurlResourceType.Issue],
+  "type"
+> & {
+  /** Must be attached to the card's outer element so the preview can be positioned. */
+  ref?: React.Ref<HTMLDivElement>;
+};
+
+/** How a plugin renders issue mentions and hover cards for the URLs it recognizes. */
+export interface IssueRenderer {
+  /**
+   * Whether the URL belongs to the plugin. It runs for every issue and link
+   * mention render, so it must be cheap and must not throw.
+   */
+  matches: (url: string) => boolean;
+  /** Renders the inline chip. Its root must be a link spreading attrs and className. */
+  Mention: LazyRenderer<IssueMentionProps>;
+  /** Renders the hover card. */
+  HoverPreview: LazyRenderer<IssueHoverPreviewProps>;
+  /**
+   * Reduces an unfurl before it is stored on the node, which every viewer of the
+   * document can read. Must return a complete issue unfurl and be deterministic.
+   */
+  persistedUnfurl?: (
+    unfurl: UnfurlResponse[UnfurlResourceType.Issue]
+  ) => UnfurlResponse[UnfurlResourceType.Issue];
 }

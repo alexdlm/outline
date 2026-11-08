@@ -22,6 +22,13 @@ export enum UnfurlResourceType {
   Project = "project",
 }
 
+/** Service specific fields of an issue unfurl, plugins augment it with their keys. */
+// oxlint-disable-next-line typescript/no-empty-object-type -- populated by module augmentation.
+export interface IssueUnfurlExtensions {}
+
+// Mapped copy, because interfaces are not assignable to JSON index signatures.
+type IssueExtensions = Pick<IssueUnfurlExtensions, keyof IssueUnfurlExtensions>;
+
 /** The unfurl response shape for each resource type. */
 export type UnfurlResponse = {
   [UnfurlResourceType.URL]: {
@@ -109,7 +116,7 @@ export type UnfurlResponse = {
     };
     /** Issue's creation time */
     createdAt: string;
-  };
+  } & IssueExtensions;
   [UnfurlResourceType.PR]: {
     /** The resource type */
     type: UnfurlResourceType.PR;

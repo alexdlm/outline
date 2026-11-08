@@ -1,4 +1,5 @@
 import { computed, override } from "mobx";
+import { computedFn } from "mobx-utils";
 import { IntegrationService, type IntegrationType } from "@shared/types";
 import naturalSort from "@shared/utils/naturalSort";
 import type RootStore from "~/stores/RootStore";
@@ -15,6 +16,18 @@ class IntegrationsStore extends Store<Integration> {
       (integration) => integration.service === service
     );
   }
+
+  /**
+   * Returns the integrations for a service, ordered by name.
+   *
+   * @param service the service to return integrations for.
+   * @returns the integrations for the service.
+   */
+  filterByService = computedFn(
+    (service: IntegrationService): Integration<IntegrationType.Embed>[] =>
+      this.orderedData.filter((integration) => integration.service === service),
+    { requiresReaction: false }
+  );
 
   @override
   get orderedData(): Integration[] {

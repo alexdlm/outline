@@ -1,6 +1,7 @@
 import { isArray, sortBy } from "es-toolkit/compat";
 import { action, makeObservable, observable, runInAction } from "mobx";
 import type { IObservableArray } from "mobx";
+import type { IssueRenderer } from "@shared/editor/types";
 import type Team from "~/models/Team";
 import type User from "~/models/User";
 import type { LazyComponent } from "~/components/LazyLoad";
@@ -15,6 +16,7 @@ export enum Hook {
   Settings = "settings",
   Imports = "imports",
   Icon = "icon",
+  IssueRenderer = "issueRenderer",
 }
 
 /**
@@ -46,6 +48,7 @@ type PluginValueMap = {
     action: React.ReactElement;
   };
   [Hook.Icon]: React.ElementType;
+  [Hook.IssueRenderer]: IssueRenderer;
 };
 
 export type Plugin<T extends Hook> = {
@@ -135,18 +138,37 @@ export class PluginManager {
   }
 
   /**
-   * Load plugin client components, must be in `/<plugin>/client/index.ts(x)`
+   * Load plugin client components, must be in `/<plugin>/client/index.ts(x)`.
+   * The modules are only loaded once, and a plugin that fails to load is
+   * logged without preventing the others from registering.
+   *
+   * @returns a promise that resolves once every plugin has loaded or failed.
    */
-  public static async loadPlugins() {
-    if (this.loaded) {
-      return;
-    }
+  public static loadPlugins(): Promise<void> {
+    this.loading ??= (async () => {
+      const r = import.meta.glob(
+        "../../plugins/*/client/index.{ts,js,tsx,jsx}"
+      );
+      const keys = Object.keys(r);
+      const results = await Promise.allSettled(keys.map((key) => r[key]()));
 
-    const r = import.meta.glob("../../plugins/*/client/index.{ts,js,tsx,jsx}");
-    await Promise.all(Object.keys(r).map((key: string) => r[key]()));
-    runInAction(() => {
-      this.loaded = true;
-    });
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          Logger.error(
+            `Failed to load plugin ${keys[index]}`,
+            result.reason instanceof Error
+              ? result.reason
+              : new Error(String(result.reason))
+          );
+        }
+      });
+
+      runInAction(() => {
+        this.loaded = true;
+      });
+    })();
+
+    return this.loading;
   }
 
   /**
@@ -163,6 +185,8 @@ export class PluginManager {
 
   @observable
   private static loaded = false;
+
+  private static loading: Promise<void> | undefined;
 }
 
 makeObservable(PluginManager);

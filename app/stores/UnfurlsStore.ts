@@ -1,10 +1,12 @@
 import { subMinutes } from "date-fns";
 import { action, makeObservable } from "mobx";
+import type { IssueRenderer } from "@shared/editor/types";
 import { errToString } from "@shared/utils/error";
 import type { UnfurlResourceType } from "@shared/types";
 import Unfurl from "~/models/Unfurl";
 import { client } from "~/utils/ApiClient";
 import Logger from "~/utils/Logger";
+import { Hook, PluginManager } from "~/utils/PluginManager";
 import type RootStore from "./RootStore";
 import Store from "./base/Store";
 
@@ -46,6 +48,27 @@ class UnfurlsStore extends Store<Unfurl<any>> {
 
     return this.request<UnfurlType>({ url, documentId });
   };
+
+  /**
+   * Returns the plugin renderer for issue links to the given URL, if any. Reads
+   * observable plugin state, so observers update when a plugin registers.
+   *
+   * @param url the URL of the issue link.
+   * @returns the renderer of the first plugin that matches the URL.
+   */
+  getIssueRenderer(url?: string): IssueRenderer | undefined {
+    if (!url) {
+      return undefined;
+    }
+
+    return PluginManager.getHooks(Hook.IssueRenderer).find((hook) => {
+      try {
+        return hook.value.matches(url);
+      } catch (_err) {
+        return false;
+      }
+    })?.value;
+  }
 
   /** Time that a url last returned no unfurl data, keyed by url. */
   private emptyFetchedAt = new Map<string, number>();

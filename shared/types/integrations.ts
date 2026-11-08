@@ -31,6 +31,7 @@ export enum IntegrationService {
   Slab = "slab",
   OKF = "okf",
   JSON = "json",
+  Codecks = "codecks",
 }
 
 /** Integration services that import documents into Outline. */
@@ -88,30 +89,39 @@ export const UserCreatableIntegrationService = {
   GitLab: IntegrationService.GitLab,
 } as const;
 
+/** The settings stored on an embed integration, plugins augment it with their keys. */
+export interface EmbedIntegrationSettings {
+  url?: string;
+  github?: {
+    installation: {
+      id: number;
+      account: { id: number; name: string; avatarUrl: string };
+    };
+  };
+  gitlab?: {
+    url?: string;
+    installation?: {
+      id: number;
+      account: { id: number; name: string; avatarUrl: string };
+    };
+  };
+  linear?: {
+    workspace: { id: string; name: string; key: string; logoUrl?: string };
+  };
+  diagrams?: {
+    url: string;
+  };
+}
+
+// Mapped copy, because interfaces are not assignable to JSON index signatures.
+type EmbedSettings = Pick<
+  EmbedIntegrationSettings,
+  keyof EmbedIntegrationSettings
+>;
+
 /** The settings stored on an integration, by integration type. */
 export type IntegrationSettings<T> = T extends IntegrationType.Embed
-  ? {
-      url?: string;
-      github?: {
-        installation: {
-          id: number;
-          account: { id: number; name: string; avatarUrl: string };
-        };
-      };
-      gitlab?: {
-        url?: string;
-        installation?: {
-          id: number;
-          account: { id: number; name: string; avatarUrl: string };
-        };
-      };
-      linear?: {
-        workspace: { id: string; name: string; key: string; logoUrl?: string };
-      };
-      diagrams?: {
-        url: string;
-      };
-    }
+  ? EmbedSettings
   : T extends IntegrationType.Analytics
     ? { measurementId: string; instanceUrl?: string; scriptName?: string }
     : T extends IntegrationType.Post

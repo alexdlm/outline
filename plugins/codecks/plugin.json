@@ -1,0 +1,7 @@
+{
+  "id": "codecks",
+  "name": "Codecks",
+  "priority": 16,
+  "description": "Adds a Codecks integration for card previews and converting card links to mentions.",
+  "after": "linear"
+}
