@@ -55,7 +55,7 @@ export function CardHoverPreview({ ref, ...unfurl }: IssueHoverPreviewProps) {
   const milestone = details?.milestone ?? null;
   const childCount = details?.childCount ?? 0;
   const lastUpdatedAt = details?.lastUpdatedAt ?? null;
-  const deckColor = getDeckColor(deck?.coverColor);
+  const deckColor = getDeckColor(deck?.coverColor, deck?.title);
   const assigneeName = assignee?.name;
   const parentTitle = parent?.title;
   const parentId = parent ? `$${parent.shortId}` : undefined;
@@ -68,8 +68,12 @@ export function CardHoverPreview({ ref, ...unfurl }: IssueHoverPreviewProps) {
             <Flex gap={2} column>
               {(project || deck) && (
                 <Breadcrumb>
-                  {deck?.coverColor && (
-                    <DeckSwatch color={deck.coverColor} size={10} />
+                  {deck && (
+                    <DeckSwatch
+                      color={deck.coverColor}
+                      title={deck.title}
+                      size={10}
+                    />
                   )}
                   {project && <span>{project.name}</span>}
                   {deck && <span>{deck.title}</span>}
@@ -99,7 +103,7 @@ export function CardHoverPreview({ ref, ...unfurl }: IssueHoverPreviewProps) {
                 )}
                 {childCount > 0 && (
                   <Label color={theme.yellow}>
-                    {t("{{ count }} sub card", { count: childCount })}
+                    {t("Sub cards: {{ count }}", { count: childCount })}
                   </Label>
                 )}
                 {milestone && (

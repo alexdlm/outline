@@ -1,9 +1,11 @@
 import { useTheme } from "styled-components";
-import { validateColorHex } from "@shared/utils/color";
+import { stringToColor, validateColorHex } from "@shared/utils/color";
 
 interface Props {
   /** The deck's cover color as returned by Codecks, which may be missing. */
   color: string | null | undefined;
+  /** The deck's title, which picks a color for decks without one. */
+  title?: string;
   /** The size of the swatch in pixels. */
   size?: number;
   /** Optional class name. */
@@ -11,14 +13,20 @@ interface Props {
 }
 
 /**
- * Returns a deck cover color that is safe to pass to color functions, Codecks
- * marks the field as a preview so its format is not guaranteed.
+ * Returns a deck's color, safe to pass to color functions. Decks without a
+ * cover color get one picked from a palette by their title, so each deck keeps
+ * a recognizable color until one is set in Codecks. Codecks marks the cover
+ * color as a preview field, so its format is checked.
  *
  * @param color the cover color from Codecks.
- * @returns the color, or undefined if it is missing or not a hex color.
+ * @param title the deck's title.
+ * @returns the color, or undefined without a valid cover color or a title.
  */
-export function getDeckColor(color: string | null | undefined) {
-  return color && validateColorHex(color) ? color : undefined;
+export function getDeckColor(color: string | null | undefined, title?: string) {
+  if (color && validateColorHex(color)) {
+    return color;
+  }
+  return title ? stringToColor(title) : undefined;
 }
 
 /**
@@ -28,9 +36,9 @@ export function getDeckColor(color: string | null | undefined) {
  * @param props the swatch props.
  * @returns the swatch element.
  */
-export function DeckSwatch({ color, size = 10, className }: Props) {
+export function DeckSwatch({ color, title, size = 10, className }: Props) {
   const theme = useTheme();
-  const fill = getDeckColor(color);
+  const fill = getDeckColor(color, title);
 
   return (
     <svg

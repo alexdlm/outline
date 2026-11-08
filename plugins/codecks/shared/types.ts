@@ -59,6 +59,14 @@ export type CodecksCardDetails = {
   lastUpdatedAt: string | null;
 };
 
+/** Which optional card details chips show, set for the whole team. */
+export type CodecksDisplay = {
+  /** Whether chips show the card's effort. */
+  effort: boolean;
+  /** Whether chips show the card's assignee. */
+  assignee: boolean;
+};
+
 /** A deck that can be chosen as the default for new cards. */
 export type CodecksDeck = {
   id: string;
@@ -78,12 +86,13 @@ export type CodecksInfo = {
   integrationId: string;
   account: CodecksAccount;
   mappings: CodecksMapping[];
+  display: CodecksDisplay;
 };
 
 declare module "@shared/types" {
   interface EmbedIntegrationSettings {
     /** Presented to team members, never holds secrets. */
-    codecks?: { account: CodecksAccount };
+    codecks?: { account: CodecksAccount; display?: CodecksDisplay };
     /** Not presented to clients, read through codecks.info by admins. */
     codecksMappings?: CodecksMapping[];
   }

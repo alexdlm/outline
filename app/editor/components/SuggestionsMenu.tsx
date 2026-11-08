@@ -64,6 +64,8 @@ export type Props<T extends MenuItem = MenuItem> = {
    * applies again whenever the search text changes.
    */
   enterClosesWhenUntouched?: boolean;
+  /** The width of the menu in pixels, defaults to 280. */
+  width?: number;
   items: T[];
 };
 
@@ -1173,7 +1175,7 @@ function SuggestionsMenu<T extends MenuItem>(props: Props<T>) {
         <BouncyPopoverContent
           side="bottom"
           align="start"
-          width={280}
+          width={props.width ?? 280}
           shrink
           style={{
             padding: 0,

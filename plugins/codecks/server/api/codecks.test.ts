@@ -134,6 +134,7 @@ describe("#codecks.connect", () => {
       integrationId: expect.any(String),
       account,
       mappings: [],
+      display: { effort: true, assignee: true },
     });
     expect(JSON.stringify(body)).not.toContain(token);
 
@@ -265,11 +266,12 @@ describe("#codecks.connect", () => {
       integrationId: integration.id,
       account: other,
       mappings: [],
+      display: { effort: true, assignee: true },
     });
 
     const integrations = await findCodecksIntegrations(team.id);
     expect(integrations[0].settings).toEqual({
-      codecks: { account: other },
+      codecks: { account: other, display: { effort: true, assignee: true } },
       codecksMappings: [],
     });
   });
@@ -301,6 +303,7 @@ describe("#codecks.info", () => {
       integrationId: integration.id,
       account,
       mappings: [mapping],
+      display: { effort: true, assignee: true },
     });
   });
 
@@ -402,13 +405,52 @@ describe("#codecks.update", () => {
       integrationId: integration.id,
       account,
       mappings,
+      display: { effort: true, assignee: true },
     });
 
     await integration.reload();
     expect(integration.settings).toEqual({
-      codecks: { account },
+      codecks: { account, display: { effort: true, assignee: true } },
       codecksMappings: mappings,
     });
+  });
+
+  it("should update the display options without changing the mappings", async () => {
+    const { admin, integration, mapping } = await buildConnectedTeam();
+
+    let res = await server.post("/api/codecks.update", admin, {
+      body: { display: { effort: false } },
+    });
+    expect(res.status).toEqual(200);
+    expect((await res.json()).data.display).toEqual({
+      effort: false,
+      assignee: true,
+    });
+
+    res = await server.post("/api/codecks.update", admin, {
+      body: { display: { assignee: false } },
+    });
+    expect((await res.json()).data.display).toEqual({
+      effort: false,
+      assignee: false,
+    });
+
+    await integration.reload();
+    expect(integration.settings?.codecks?.display).toEqual({
+      effort: false,
+      assignee: false,
+    });
+    expect(integration.settings?.codecksMappings).toEqual([mapping]);
+  });
+
+  it("should require mappings or display options", async () => {
+    const { admin } = await buildConnectedTeam();
+
+    const res = await server.post("/api/codecks.update", admin, {
+      body: {},
+    });
+
+    expect(res.status).toEqual(400);
   });
 
   it("should stop presenting cards of a project that is no longer mapped", async () => {
@@ -521,6 +563,24 @@ describe("#integrations.list", () => {
     expect(res.status).toEqual(200);
     expect(settings?.codecks).toEqual({ account });
     expect(settings).not.toHaveProperty("codecksMappings");
+  });
+
+  it("should present the display options to members", async () => {
+    const { team, account, integration } = await buildConnectedTeam();
+    const user = await buildUser({ teamId: team.id });
+    integration.settings = {
+      ...integration.settings,
+      codecks: { account, display: { effort: false, assignee: true } },
+    };
+    await integration.save();
+
+    const res = await server.post("/api/integrations.list", user);
+    const settings = codecksSettings(await res.json());
+
+    expect(settings?.codecks?.display).toEqual({
+      effort: false,
+      assignee: true,
+    });
   });
 
   it("should not present the organization to guests", async () => {

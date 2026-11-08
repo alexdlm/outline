@@ -1,30 +1,37 @@
+import { observer } from "mobx-react";
 import { darken, lighten, transparentize } from "polished";
+import { SettingsIcon } from "outline-icons";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 import type { DefaultTheme } from "styled-components";
 import styled, { css } from "styled-components";
 import { Backticks } from "@shared/components/Backticks";
 import type { IssueMentionProps } from "@shared/editor/types";
+import { IntegrationService } from "@shared/types";
 import { stringToColor } from "@shared/utils/color";
 import { sanitizeImageSrc } from "@shared/utils/urls";
 import { Avatar, AvatarSize } from "~/components/Avatar";
+import useStores from "~/hooks/useStores";
 import { CodecksUtils } from "../../shared/CodecksUtils";
+import { readCodecksDisplay } from "../../shared/display";
 import type { CodecksPriority } from "../../shared/types";
+import { getCodecksAccount } from "../account";
 import { CodecksIcon } from "../Icon";
 import { LazyCardHoverPreview } from "../lazy";
-import { DeckSwatch, getDeckColor } from "./DeckSwatch";
+import { getDeckColor } from "./DeckSwatch";
 import { getPriorityColor, getPriorityLabel } from "./priority";
 import { StatusGlyph, getCardStatus, getStatusLabel } from "./StatusGlyph";
 
 /**
  * Renders a Codecks card mention as a chip in the style of a Codecks card,
- * with priority, status, deck, parent card, short id, effort and assignee.
- * Viewers without access to the card see a plain link instead.
+ * with priority, status, deck, parent card and short id, and the effort and
+ * assignee unless the team turned them off. Viewers without access to the card
+ * see a plain link instead.
  *
  * @param props the mention props.
  * @returns the chip element.
  */
-export function CardChip({
+export const CardChip = observer(function CardChip({
   attrs,
   className,
   href,
@@ -34,6 +41,11 @@ export function CardChip({
   loaded,
 }: IssueMentionProps) {
   const { t } = useTranslation();
+  const { integrations } = useStores();
+  const integration = integrations
+    .filterByService(IntegrationService.Codecks)
+    .find((candidate) => !!getCodecksAccount(candidate));
+  const display = readCodecksDisplay(integration?.settings);
 
   React.useEffect(() => {
     void LazyCardHoverPreview.preload();
@@ -81,9 +93,9 @@ export function CardChip({
   const status = getCardStatus(details, CodecksUtils.isClosed(card));
   const priority = details?.priority ?? null;
   const parent = details?.parent ?? null;
-  const assignee = details?.assignee ?? null;
+  const assignee = display.assignee ? (details?.assignee ?? null) : null;
   const deck = details?.deck ?? null;
-  const effort = details?.effort ?? null;
+  const effort = display.effort ? (details?.effort ?? null) : null;
   const hero = !!details && details.childCount > 0;
 
   const ariaLabel = [
@@ -91,6 +103,7 @@ export function CardChip({
     card.id,
     getStatusLabel(t, status),
     priority ? getPriorityLabel(t, priority) : undefined,
+    effort !== null ? t("Effort {{ effort }}", { effort }) : undefined,
     assignee ? t("Assigned to {{ name }}", { name: assignee.name }) : undefined,
   ]
     .filter(Boolean)
@@ -105,11 +118,10 @@ export function CardChip({
       rel="noopener noreferrer nofollow"
       aria-label={ariaLabel}
       $priority={priority}
-      $deckColor={getDeckColor(deck?.coverColor)}
+      $deckColor={getDeckColor(deck?.coverColor, deck?.title)}
       $hero={hero}
     >
       <StatusGlyph status={status} size={14} />
-      {deck?.coverColor && <DeckSwatch color={deck.coverColor} size={10} />}
       <Label>
         {parent && (
           <ParentPill>
@@ -122,8 +134,8 @@ export function CardChip({
       </Label>
       <IdBadge $hero={hero}>{card.id}</IdBadge>
       {effort !== null && (
-        <Effort>
-          <EffortGlyph />
+        <Effort title={t("Effort {{ effort }}", { effort })}>
+          <SettingsIcon size={14} />
           {effort}
         </Effort>
       )}
@@ -143,27 +155,10 @@ export function CardChip({
       )}
     </Chip>
   );
-}
+});
 
 function isUrlLike(label: string, href: string) {
   return !label || label === href || /^https?:\/\//i.test(label);
-}
-
-function EffortGlyph() {
-  return (
-    <svg
-      width="10"
-      height="10"
-      viewBox="0 0 10 10"
-      fill="currentColor"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <rect x="0.5" y="6" width="2.5" height="3.5" rx="0.75" />
-      <rect x="3.75" y="3.5" width="2.5" height="6" rx="0.75" />
-      <rect x="7" y="0.5" width="2.5" height="9" rx="0.75" />
-    </svg>
-  );
 }
 
 interface ChipProps {
@@ -183,10 +178,11 @@ function getChipShadow({
   if (priorityColor) {
     shadows.push(`inset 3px 0 0 0 ${priorityColor}`);
   }
+  if ($deckColor) {
+    shadows.push(`inset 0 -2px 0 0 ${$deckColor}`);
+  }
   if ($hero) {
     shadows.push(`inset 0 0 0 1px ${transparentize(0.25, theme.yellow)}`);
-  } else if ($deckColor) {
-    shadows.push(`inset 0 0 0 1px ${transparentize(0.55, $deckColor)}`);
   }
   return shadows.length ? shadows.join(", ") : "none";
 }
@@ -235,7 +231,7 @@ const Effort = styled.span`
   ${pill}
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 1px;
   font-variant-numeric: tabular-nums;
 `;
 

@@ -41,17 +41,31 @@ export type CodecksConnectReq = z.infer<typeof CodecksConnectSchema>;
 
 /** The request to replace the project to collection mappings. */
 export const CodecksUpdateSchema = BaseSchema.extend({
-  body: z.object({
-    /** Replaces all mappings of the team. */
-    mappings: z
-      .array(
-        CodecksMappingSchema.extend({
-          projectName: z.string().trim().max(255),
-          defaultDeckId: CodecksMappingSchema.shape.defaultDeckId.default(null),
+  body: z
+    .object({
+      /** Replaces all mappings of the team, left unchanged when omitted. */
+      mappings: z
+        .array(
+          CodecksMappingSchema.extend({
+            projectName: z.string().trim().max(255),
+            defaultDeckId:
+              CodecksMappingSchema.shape.defaultDeckId.default(null),
+          })
+        )
+        .max(100)
+        .optional(),
+
+      /** Which optional card details chips show, omitted options are unchanged. */
+      display: z
+        .object({
+          effort: z.boolean().optional(),
+          assignee: z.boolean().optional(),
         })
-      )
-      .max(100),
-  }),
+        .optional(),
+    })
+    .refine((body) => body.mappings || body.display, {
+      message: "Provide mappings or display options to update.",
+    }),
 });
 
 export type CodecksUpdateReq = z.infer<typeof CodecksUpdateSchema>;

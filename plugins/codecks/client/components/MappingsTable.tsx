@@ -322,7 +322,9 @@ const MappingRow = observer(function MappingRow({
         type: "item",
         label: deck.title,
         value: deck.id,
-        icon: <DeckSwatch color={deck.coverColor} size={12} />,
+        icon: (
+          <DeckSwatch color={deck.coverColor} title={deck.title} size={12} />
+        ),
       })),
     ],
     [project, t]

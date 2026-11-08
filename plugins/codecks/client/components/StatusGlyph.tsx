@@ -32,6 +32,11 @@ export function getCardStatus(
     return closed ? "done" : "open";
   }
 
+  // A finished card reads as done even once archived.
+  if (closed) {
+    return "done";
+  }
+
   const derived = details.derivedStatus ?? "";
   if (
     details.visibility === "archived" ||
@@ -40,9 +45,6 @@ export function getCardStatus(
     derived.startsWith("archived")
   ) {
     return "archived";
-  }
-  if (closed) {
-    return "done";
   }
 
   switch (derived) {
@@ -58,7 +60,11 @@ export function getCardStatus(
     case "started":
       return "started";
     case "hero":
-      return "hero";
+      // Only cards with sub cards are shown as hero cards.
+      if (details.childCount > 0) {
+        return "hero";
+      }
+      break;
   }
 
   if (details.isDoc) {

@@ -7,6 +7,7 @@ import { IntegrationService } from "@shared/types";
 import { errToString } from "@shared/utils/error";
 import { ConnectedButton } from "~/scenes/Settings/components/ConnectedButton";
 import { IntegrationScene } from "~/scenes/Settings/components/IntegrationScene";
+import SettingRow from "~/scenes/Settings/components/SettingRow";
 import { AvatarSize } from "~/components/Avatar";
 import Button from "~/components/Button";
 import Flex from "~/components/Flex";
@@ -14,6 +15,7 @@ import Heading from "~/components/Heading";
 import List from "~/components/List";
 import ListItem from "~/components/List/Item";
 import Notice from "~/components/Notice";
+import Switch from "~/components/Switch";
 import PlaceholderText from "~/components/PlaceholderText";
 import Text from "~/components/Text";
 import Time from "~/components/Time";
@@ -21,6 +23,7 @@ import env from "~/env";
 import useStores from "~/hooks/useStores";
 import { client } from "~/utils/ApiClient";
 import type {
+  CodecksDisplay,
   CodecksInfo,
   CodecksMapping,
   CodecksProject,
@@ -136,6 +139,40 @@ export const CodecksSettings = observer(function CodecksSettings() {
     []
   );
 
+  const handleDisplayChange = React.useCallback(
+    async (display: Partial<CodecksDisplay>) => {
+      try {
+        const res = await client.post<{ data: CodecksInfo }>(
+          "/codecks.update",
+          { display }
+        );
+        setInfo(res.data);
+
+        // Chips read the options from the integration in the store.
+        await integrations
+          .fetchAll({
+            service: IntegrationService.Codecks,
+            withRelations: true,
+          })
+          .catch(() => undefined);
+        toast.success(t("Settings saved"));
+      } catch (err) {
+        toast.error(errToString(err));
+      }
+    },
+    [integrations, t]
+  );
+
+  const handleToggleEffort = React.useCallback(
+    (effort: boolean) => handleDisplayChange({ effort }),
+    [handleDisplayChange]
+  );
+
+  const handleToggleAssignee = React.useCallback(
+    (assignee: boolean) => handleDisplayChange({ assignee }),
+    [handleDisplayChange]
+  );
+
   const handleReplace = React.useCallback(() => setReplacing(true), []);
 
   const handleCancelReplace = React.useCallback(() => setReplacing(false), []);
@@ -206,6 +243,38 @@ export const CodecksSettings = observer(function CodecksSettings() {
             />
           </Section>
         )}
+
+        <Heading as="h2">{t("Card mentions")}</Heading>
+        <Text as="p" type="secondary">
+          {t(
+            "Choose which optional details card mentions show in documents. Hovering a card always shows all of its details."
+          )}
+        </Text>
+        <SettingRow
+          name="codecksEffort"
+          label={t("Effort")}
+          description={t("Show the effort of a card next to its short id.")}
+        >
+          <Switch
+            id="codecksEffort"
+            checked={info.display.effort}
+            onChange={handleToggleEffort}
+          />
+        </SettingRow>
+        <SettingRow
+          name="codecksAssignee"
+          label={t("Assignee")}
+          description={t(
+            "Show the avatar of the person a card is assigned to."
+          )}
+          border={false}
+        >
+          <Switch
+            id="codecksAssignee"
+            checked={info.display.assignee}
+            onChange={handleToggleAssignee}
+          />
+        </SettingRow>
 
         <Heading as="h2">{t("Projects")}</Heading>
         <Text as="p" type="secondary">

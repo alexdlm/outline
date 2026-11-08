@@ -28,6 +28,7 @@ import { AuthenticationType } from "@server/types";
 import { CacheHelper } from "@server/utils/CacheHelper";
 import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import { RedisPrefixHelper } from "@server/utils/RedisPrefixHelper";
+import { readCodecksDisplay } from "../../shared/display";
 import type { CodecksMapping } from "../../shared/types";
 import { Codecks, CodecksError } from "../codecks";
 import type { CodecksCard, CodecksConnection } from "../codecks";
@@ -91,7 +92,7 @@ router.post(
       // Mappings refer to projects of the previous organization.
       const sameAccount = getCodecksAccount(existing)?.id === account.id;
       existing.settings = {
-        codecks: { account },
+        codecks: { account, display: readCodecksDisplay(existing.settings) },
         codecksMappings: sameAccount
           ? (getCodecksMappings(existing) ?? [])
           : [],
@@ -185,7 +186,7 @@ router.post(
   validate(T.CodecksUpdateSchema),
   transaction(),
   async (ctx: APIContext<T.CodecksUpdateReq>) => {
-    const { mappings } = ctx.input.body;
+    const { mappings, display } = ctx.input.body;
     const { user } = ctx.state.auth;
     const { transaction } = ctx.state;
 
@@ -198,16 +199,23 @@ router.post(
 
     authorize(user, "update", integration);
 
-    await assertMappableCollections(
-      user,
-      mappings.map((mapping) => mapping.collectionId),
-      transaction
-    );
+    if (mappings) {
+      await assertMappableCollections(
+        user,
+        mappings.map((mapping) => mapping.collectionId),
+        transaction
+      );
+    }
 
     integration.settings = {
       ...integration.settings,
-      codecks: { account },
-      codecksMappings: uniqueMappings(mappings),
+      codecks: {
+        account,
+        display: { ...readCodecksDisplay(integration.settings), ...display },
+      },
+      codecksMappings: mappings
+        ? uniqueMappings(mappings)
+        : (getCodecksMappings(integration) ?? []),
     };
     await integration.saveWithCtx(ctx);
 

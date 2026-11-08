@@ -42,6 +42,7 @@ import {
   shouldCloseCardMenu,
   toSearchQuery,
 } from "../search";
+import { getDeckColor } from "./DeckSwatch";
 import { StatusGlyph, getCardStatus, getStatusLabel } from "./StatusGlyph";
 
 type IssueUnfurl = UnfurlResponse[UnfurlResourceType.Issue];
@@ -205,7 +206,6 @@ export const CardMenu = observer(function CardMenu_({
     return results.cards.map((card) => ({
       name: "mention",
       title: card.title || card.id,
-      subtitle: card.codecks?.parent?.title,
       icon: (
         <StatusGlyph
           status={getCardStatus(card.codecks, CodecksUtils.isClosed(card))}
@@ -240,9 +240,6 @@ export const CardMenu = observer(function CardMenu_({
         {...options}
         icon={item.icon}
         title={<CardLabel card={item.card} selected={options.selected} />}
-        subtitle={
-          item.subtitle ? <ParentTitle>{item.subtitle}</ParentTitle> : undefined
-        }
       />
     );
   }, []);
@@ -267,6 +264,7 @@ export const CardMenu = observer(function CardMenu_({
       onClose={onClose}
       filterable={false}
       enterClosesWhenUntouched={isEnterNewLineQuery(query)}
+      width={MenuWidth}
       items={items}
       renderMenuItem={renderMenuItem}
     />
@@ -288,14 +286,45 @@ function CardLabel({ card, selected }: CardLabelProps) {
   const { t } = useTranslation();
   const status = getCardStatus(card.codecks, CodecksUtils.isClosed(card));
   const assignee = card.codecks?.assignee;
+  const parent = card.codecks?.parent;
+  const deck = card.codecks?.deck;
+  const childCount = card.codecks?.childCount ?? 0;
+  const deckColor = getDeckColor(deck?.coverColor, deck?.title);
 
   return (
     <>
-      <ShortId $selected={selected}>{card.id}</ShortId>
-      <Title>
-        <Backticks content={card.title} />
-      </Title>
-      <VisuallyHidden.Root>{getStatusLabel(t, status)}</VisuallyHidden.Root>
+      <Lines>
+        <Heading>
+          <ShortId $selected={selected}>{card.id}</ShortId>
+          <Title>
+            <Backticks content={card.title || card.id} />
+          </Title>
+          <VisuallyHidden.Root>{getStatusLabel(t, status)}</VisuallyHidden.Root>
+        </Heading>
+        {(parent || deck || childCount > 0) && (
+          <Details>
+            {parent && (
+              <Pill $selected={selected}>
+                <PillText>
+                  <Backticks content={parent.title} />
+                </PillText>
+              </Pill>
+            )}
+            {!parent && childCount > 0 && (
+              <Pill $selected={selected}>
+                <PillText>
+                  {t("Sub cards: {{ count }}", { count: childCount })}
+                </PillText>
+              </Pill>
+            )}
+            {deck && (
+              <Pill $selected={selected} $color={deckColor}>
+                <PillText>{deck.title}</PillText>
+              </Pill>
+            )}
+          </Details>
+        )}
+      </Lines>
       {assignee && (
         <Assignee>
           <Avatar
@@ -342,37 +371,95 @@ async function searchCards(
 /** How long typing must pause before searching, in milliseconds. */
 const SearchDelay = 150;
 
+/** The width of the menu in pixels, wider than other menus to fit card titles. */
+const MenuWidth = 400;
+
+// The short id and title lead each row, the parent and deck follow as pills.
+// The alignment is set because menu rows are buttons, which center text.
+const Lines = styled.span`
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: start;
+  padding: 3px 0;
+  line-height: 1.3;
+`;
+
+const Heading = styled.span`
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+`;
+
 const ShortId = styled.span<{ $selected: boolean }>`
   flex-shrink: 0;
   font-family: ${(props) => props.theme.fontFamilyMono};
-  font-size: 0.85em;
+  font-size: 13px;
   color: ${(props) =>
     props.$selected
-      ? transparentize(0.35, props.theme.accentText)
-      : props.theme.textTertiary};
+      ? transparentize(0.25, props.theme.accentText)
+      : props.theme.textSecondary};
 `;
 
 const Title = styled.span`
-  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+`;
+
+const PillText = styled.span`
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 `;
 
-const ParentTitle = styled.span`
-  display: inline-block;
-  max-width: 14em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
+const Details = styled.span`
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 `;
 
-// The label lays out the title before the subtitle, so the avatar is moved to
-// the end of the row with the flex order.
+// A pill with a color is a deck, marked by a dot in the deck's color.
+const Pill = styled.span<{ $selected: boolean; $color?: string }>`
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 60%;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  color: ${(props) =>
+    props.$selected ? props.theme.accentText : props.theme.textSecondary};
+  background: ${(props) =>
+    props.$selected
+      ? transparentize(0.8, props.theme.accentText)
+      : props.$color
+        ? transparentize(0.85, props.$color)
+        : transparentize(0.88, props.theme.textTertiary)};
+
+  ${(props) =>
+    props.$color
+      ? `&::before {
+          content: "";
+          flex-shrink: 0;
+          width: 7px;
+          height: 7px;
+          border-radius: 2px;
+          background: ${props.$color};
+        }`
+      : ""}
+`;
+
 const Assignee = styled.span`
-  order: 1;
   flex-shrink: 0;
   display: flex;
-  margin-inline-start: auto;
   padding-inline-start: 8px;
 `;

@@ -1,6 +1,7 @@
 import { UnfurlResourceType, type UnfurlResponse } from "@shared/types";
 import type { Integration } from "@server/models";
 import { CodecksUtils } from "../shared/CodecksUtils";
+import { readCodecksDisplay } from "../shared/display";
 import type {
   CodecksAccount,
   CodecksCardDetails,
@@ -56,6 +57,7 @@ export function presentInfo(
     integrationId: integration.id,
     account,
     mappings: getCodecksMappings(integration) ?? [],
+    display: readCodecksDisplay(integration.settings),
   };
 }
 
