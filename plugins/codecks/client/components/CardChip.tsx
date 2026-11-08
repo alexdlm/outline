@@ -109,7 +109,7 @@ export function CardChip({
       $hero={hero}
     >
       <StatusGlyph status={status} size={14} />
-      {deck && <DeckSwatch color={deck.coverColor} size={10} />}
+      {deck?.coverColor && <DeckSwatch color={deck.coverColor} size={10} />}
       <Label>
         {parent && (
           <ParentPill>

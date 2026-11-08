@@ -68,7 +68,9 @@ export function CardHoverPreview({ ref, ...unfurl }: IssueHoverPreviewProps) {
             <Flex gap={2} column>
               {(project || deck) && (
                 <Breadcrumb>
-                  {deck && <DeckSwatch color={deck.coverColor} size={10} />}
+                  {deck?.coverColor && (
+                    <DeckSwatch color={deck.coverColor} size={10} />
+                  )}
                   {project && <span>{project.name}</span>}
                   {deck && <span>{deck.title}</span>}
                 </Breadcrumb>
@@ -91,7 +93,7 @@ export function CardHoverPreview({ ref, ...unfurl }: IssueHoverPreviewProps) {
                   </Label>
                 )}
                 {details?.effort !== null && details?.effort !== undefined && (
-                  <Label>
+                  <Label color={theme.textTertiary}>
                     {t("Effort {{ effort }}", { effort: details.effort })}
                   </Label>
                 )}
