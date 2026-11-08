@@ -1,5 +1,9 @@
+import { EditorState, NodeSelection } from "prosemirror-state";
+import type { EditorView } from "prosemirror-view";
+import type { Editor } from "../../../app/editor";
 import { MentionType } from "../../types";
 import { schema, serializer } from "../../test/editor";
+import Mention from "./Mention";
 
 const id = "0c440212-8b40-49fa-8a64-2548d6b60d59";
 const modelId = "c85a0d80-3a89-4b25-a0cd-e7fc83f0d226";
@@ -159,5 +163,127 @@ describe("Mention serialization", () => {
         )
       ).toBe(`[Engineering](/collection/${modelId})`);
     });
+  });
+});
+
+describe("Opening mentions", () => {
+  const cardUrl = "https://acme.codecks.io/card/16a-a-card";
+  const event = {} as MouseEvent;
+
+  function setup(attrs: Record<string, unknown>) {
+    const onClickLink = vi.fn();
+    const mention = new Mention();
+    const editor: { props: Pick<Editor["props"], "onClickLink"> } = {
+      props: { onClickLink },
+    };
+    mention.bindEditor(editor as Editor);
+
+    const doc = schema.nodeFromJSON({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "See " },
+            { type: "mention", attrs: { id, modelId, ...attrs } },
+          ],
+        },
+      ],
+    });
+    const pos = 5;
+    const state = EditorState.create({ schema, doc });
+    const selected = state.apply(
+      state.tr.setSelection(NodeSelection.create(doc, pos))
+    );
+    const node = doc.nodeAt(pos);
+    if (!node) {
+      throw new Error("No mention in the document");
+    }
+
+    const doubleClick = (editable: boolean) => {
+      const plugin = mention.plugins.find(
+        (candidate) => candidate.props.handleDoubleClickOn
+      );
+      const view = { editable } as EditorView;
+      return plugin?.props.handleDoubleClickOn?.call(
+        plugin,
+        view,
+        pos,
+        node,
+        pos,
+        event,
+        true
+      );
+    };
+
+    return {
+      onClickLink,
+      doubleClick,
+      pressEnter: () => mention.keys().Enter(selected),
+    };
+  }
+
+  it("opens a selected URL mention with Enter", () => {
+    const { onClickLink, pressEnter } = setup({
+      type: MentionType.URL,
+      href: cardUrl,
+      label: cardUrl,
+    });
+
+    expect(pressEnter()).toBe(true);
+    expect(onClickLink).toHaveBeenCalledWith(cardUrl);
+  });
+
+  it("opens a selected document mention with Enter", () => {
+    const { onClickLink, pressEnter } = setup({
+      type: MentionType.Document,
+      label: "Roadmap",
+    });
+
+    expect(pressEnter()).toBe(true);
+    expect(onClickLink).toHaveBeenCalledWith(`/doc/${modelId}`);
+  });
+
+  it("opens a mention on double click while editing", () => {
+    const { onClickLink, doubleClick } = setup({
+      type: MentionType.URL,
+      href: cardUrl,
+      label: cardUrl,
+    });
+
+    expect(doubleClick(true)).toBe(true);
+    expect(onClickLink).toHaveBeenCalledWith(cardUrl, event);
+  });
+
+  it("leaves a double click to the link when read-only", () => {
+    const { onClickLink, doubleClick } = setup({
+      type: MentionType.URL,
+      href: cardUrl,
+      label: cardUrl,
+    });
+
+    expect(doubleClick(false)).toBe(false);
+    expect(onClickLink).not.toHaveBeenCalled();
+  });
+
+  it("ignores a double click on a user mention", () => {
+    const { onClickLink, doubleClick } = setup({
+      type: MentionType.User,
+      label: "Jane",
+    });
+
+    expect(doubleClick(true)).toBe(false);
+    expect(onClickLink).not.toHaveBeenCalled();
+  });
+
+  it("does not open an unsafe href", () => {
+    const { onClickLink, doubleClick } = setup({
+      type: MentionType.URL,
+      href: "javascript:alert(1)",
+      label: "Card",
+    });
+
+    expect(doubleClick(true)).toBe(true);
+    expect(onClickLink).not.toHaveBeenCalledWith("javascript:alert(1)", event);
   });
 });

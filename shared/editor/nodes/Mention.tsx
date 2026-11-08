@@ -65,6 +65,16 @@ function isExternalMention(type: MentionType): boolean {
   );
 }
 
+/** The mention types that link somewhere the editor can open. */
+const NavigableMentionTypes = [
+  MentionType.Collection,
+  MentionType.Document,
+  MentionType.Issue,
+  MentionType.PullRequest,
+  MentionType.Project,
+  MentionType.URL,
+];
+
 /** The mention type that represents each kind of unfurled resource. */
 const MentionTypeForResource: Partial<Record<UnfurlResourceType, MentionType>> =
   {
@@ -122,6 +132,9 @@ export default class Mention extends Node {
       marks: "",
       group: "inline",
       atom: true,
+      // Without this, dragging a mention rendered as a link drags the URL
+      // rather than the node, and the drop inserts nothing.
+      draggable: true,
       parseDOM: [
         {
           tag: `.${this.name}`,
@@ -269,47 +282,40 @@ export default class Mention extends Node {
           return null;
         },
       }),
+      // A click selects a mention while editing, so a double click opens it.
+      new Plugin({
+        props: {
+          handleDoubleClickOn: (view, _pos, node, _nodePos, event, direct) => {
+            if (
+              !direct ||
+              !view.editable ||
+              node.type.name !== this.name ||
+              !NavigableMentionTypes.includes(node.attrs.type)
+            ) {
+              return false;
+            }
+
+            const link = this.getLink(node);
+            if (link) {
+              this.editor.props.onClickLink?.(link, event);
+            }
+            return true;
+          },
+        },
+      }),
     ];
   }
 
   keys(): Record<string, Command> {
-    const NavigableMention = [
-      MentionType.Collection,
-      MentionType.Document,
-      MentionType.Issue,
-      MentionType.PullRequest,
-      MentionType.Project,
-    ];
-
     return {
       Enter: (state) => {
         const { selection } = state;
         if (
           selection instanceof NodeSelection &&
           selection.node.type.name === this.name &&
-          NavigableMention.includes(selection.node.attrs.type)
+          NavigableMentionTypes.includes(selection.node.attrs.type)
         ) {
-          const mentionType = selection.node.attrs.type;
-
-          let link: string | undefined;
-
-          if (isExternalMention(mentionType)) {
-            link = sanitizeUrl(selection.node.attrs.href);
-          } else {
-            const { modelId } = selection.node.attrs;
-
-            const linkType =
-              selection.node.attrs.type === MentionType.Document
-                ? "doc"
-                : "collection";
-
-            link = `/${linkType}/${modelId}${
-              selection.node.attrs.anchorId
-                ? `#${selection.node.attrs.anchorId}`
-                : ""
-            }`;
-          }
-
+          const link = this.getLink(selection.node);
           if (link) {
             this.editor.props.onClickLink?.(link);
           }
@@ -510,4 +516,14 @@ export default class Mention extends Node {
         view.dispatch(transaction);
       }
     };
+
+  private getLink(node: ProsemirrorNode): string | undefined {
+    const { type, href, modelId, anchorId } = node.attrs;
+    if (isExternalMention(type) || type === MentionType.URL) {
+      return sanitizeUrl(href);
+    }
+
+    const linkType = type === MentionType.Document ? "doc" : "collection";
+    return `/${linkType}/${modelId}${anchorId ? `#${anchorId}` : ""}`;
+  }
 }

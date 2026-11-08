@@ -7,7 +7,7 @@ import { richExtensions } from "@shared/editor/nodes";
 import type { IssueHoverPreviewProps } from "@shared/editor/types";
 import { UnfurlResourceType } from "@shared/types";
 import { stringToColor } from "@shared/utils/color";
-import { sanitizeImageSrc } from "@shared/utils/urls";
+import { sanitizeImageSrc, sanitizeUrl } from "@shared/utils/urls";
 import { Avatar, AvatarSize } from "~/components/Avatar";
 import Editor from "~/components/Editor";
 import Flex from "~/components/Flex";
@@ -61,7 +61,7 @@ export function CardHoverPreview({ ref, ...unfurl }: IssueHoverPreviewProps) {
   const parentId = parent ? `$${parent.shortId}` : undefined;
 
   return (
-    <Preview as="a" href={url} target="_blank" rel="noopener noreferrer">
+    <Preview as="div">
       <Flex column ref={ref}>
         <Card fadeOut={false}>
           <CardContent>
@@ -81,10 +81,14 @@ export function CardHoverPreview({ ref, ...unfurl }: IssueHoverPreviewProps) {
               )}
               <Title>
                 <StyledStatusGlyph status={status} size={18} />
-                <span>
+                <TitleLink
+                  href={sanitizeUrl(url)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   <Backticks content={title} />
                   &nbsp;<Text type="tertiary">{id}</Text>
-                </span>
+                </TitleLink>
               </Title>
 
               <Labels wrap gap={6} align="center">
@@ -201,6 +205,15 @@ const Breadcrumb = styled(BreadcrumbContainer)`
   span:not(:last-child)::after {
     content: "›";
     margin: 0 0 0 6px;
+  }
+`;
+
+const TitleLink = styled.a`
+  color: inherit;
+  cursor: var(--pointer);
+
+  &:hover {
+    text-decoration: underline;
   }
 `;
 

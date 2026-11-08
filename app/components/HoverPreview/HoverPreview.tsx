@@ -139,13 +139,11 @@ const HoverPreviewDesktop = observer(
                 opacity: 0,
                 y: -8,
                 filter: "blur(5px)",
-                pointerEvents: "none",
               }}
               animate={{
                 opacity: 1,
                 y: 0,
                 filter: "blur(0px)",
-                transitionEnd: { pointerEvents: "auto" },
               }}
               transition={{
                 y: {

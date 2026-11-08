@@ -270,6 +270,11 @@ export default class Link extends Mark<LinkOptions> {
             event.stopPropagation();
             event.preventDefault();
 
+            // The first click of a double click has already followed the link.
+            if (event.detail > 1) {
+              return true;
+            }
+
             try {
               this.options.onClickLink(href, event);
             } catch (_err) {
